@@ -1,0 +1,107 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MolClusterkit"
+dynamic = ["version"]
+description = "Toolkit containing different molecule clustering methods and algorithms."
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+keywords = ["clustering", "cheminformatics"]
+authors = [{ name = "David Araripe", email = "david.araripe17@gmail.com" }]
+maintainers = [{ name = "David Araripe", email = "david.araripe17@gmail.com" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.10",
+]
+
+dependencies = [
+    "rdkit >= 2023.03.1",
+    "numpy",
+    "pandas",
+    "joblib",
+    "loguru",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "networkx",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff",
+  "isort",
+  "black",
+]
+
+[project.scripts]
+butinacluster = "MolClusterkit.cli.butina_cluster:main"
+mcscluster = "MolClusterkit.cli.mcs_cluster:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "MolClusterkit.__version__" }
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+exclude = '''
+(
+    asv_bench/env
+  | \.egg
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.nox
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)
+'''
+
+[tool.ruff]
+# Enable the pycodestyle (`E`) and Pyflakes (`F`) rules.
+select = ["E", "F", "B", "W"]
+ignore = ["E501"] # line too long
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+]
+
+# Same as Black.
+line-length = 88
+
+# Assume Python 3.9.
+target-version = "py39"
