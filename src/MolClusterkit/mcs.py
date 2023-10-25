@@ -63,7 +63,7 @@ class MCSClustering:
 
     def compute_similarity_matrix(
         self, show_progress=True, n_jobs=8
-    ) -> Tuple[np.ndarraym, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Compute the similarity matrix based on MCS for all molecules.
 
         Args:
