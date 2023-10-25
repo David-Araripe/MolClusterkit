@@ -61,11 +61,18 @@ class MCSClustering:
         smarts_string, similarity = self._mcs_similarity(smi1, smi2)
         return smarts_string, similarity
 
-    def compute_similarity_matrix(self, show_progress=True, n_jobs=8) -> np.ndarray:
+    def compute_similarity_matrix(
+        self, show_progress=True, n_jobs=8
+    ) -> Tuple[np.ndarraym, np.ndarray]:
         """Compute the similarity matrix based on MCS for all molecules.
 
         Args:
             n_jobs: number of jobs for parallel processing. Defaults to 8.
+            show_progress: whether to show the progress bar. Defaults to True.
+
+        Returns:
+            smarts_matrix: np.ndarray with the smarts patterns of the MCS's.
+            simi_matrix: np.ndarray with the similarity matrix.
         """
         # ---- First we compute the similarity matrix ----
         # create the similarity matrix with 1s in the diagonal
@@ -95,7 +102,7 @@ class MCSClustering:
         # ---- Save the results as object's attributes ----
         self.similarity_matrix = simi_matrix
         self.smarts_matrix = smarts_matrix
-        return simi_matrix
+        return smarts_matrix, simi_matrix
 
     def dbscan_clustering(self, eps: float = 0.5, min_samples: int = 5) -> list:
         """DBSCAN clustering based on the similarity matrix.

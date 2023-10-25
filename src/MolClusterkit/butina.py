@@ -66,7 +66,7 @@ class ButinaClustering:
         else:
             smiles_list = self.smiles_list
         fingerprints = Parallel(n_jobs=self.njobs)(
-            delayed(partial(self.smi2fp, radius=2))(smi) for smi in smiles_list
+            delayed(partial(self.smi2fp, radius=radius))(smi) for smi in smiles_list
         )
         return [fp for fp in fingerprints if fp is not None]
 
