@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "rdkit >= 2023.03.1",
     "numpy",
+    "tqdm",
     "pandas",
     "joblib",
     "loguru",
