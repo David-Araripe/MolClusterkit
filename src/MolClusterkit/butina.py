@@ -11,6 +11,7 @@ from loguru import logger
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
 from rdkit.ML.Cluster import Butina
+from tqdm import tqdm
 
 
 def reset_index_if_needed(df: pd.DataFrame) -> pd.DataFrame:
@@ -52,7 +53,7 @@ class ButinaClustering:
         self.fingerprints = self._compute_fingerprints()
         self.mol_clusters = None
 
-    def _compute_fingerprints(self, radius: int = 2) -> List:
+    def _compute_fingerprints(self, show_progress=True, radius: int = 2) -> List:
         """Compute fingerprints for the given SMILES list.
 
         Args:
@@ -60,8 +61,12 @@ class ButinaClustering:
 
         Returns:
             List: List of computed fingerprints."""
+        if show_progress:
+            smiles_list = tqdm(self.smiles_list, total=len(self.smiles_list))
+        else:
+            smiles_list = self.smiles_list
         fingerprints = Parallel(n_jobs=self.njobs)(
-            delayed(partial(self.smi2fp, radius=2))(smi) for smi in self.smiles_list
+            delayed(partial(self.smi2fp, radius=2))(smi) for smi in smiles_list
         )
         return [fp for fp in fingerprints if fp is not None]
 
