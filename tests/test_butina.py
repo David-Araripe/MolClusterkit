@@ -35,7 +35,7 @@ class TestButina(unittest.TestCase):
         self.assertIsNotNone(bclusterer.fingerprints)
 
         # Test clustering
-        clusters = bclusterer.cluster(cutoff=0.4)
+        clusters = bclusterer.cluster(cutoff=0.4)  # noqa: F841
         self.assertIsNotNone(bclusterer.mol_clusters)
 
         # Test assign_clusters_to_dataframe
@@ -45,8 +45,9 @@ class TestButina(unittest.TestCase):
         )
         self.assertTrue("cluster_id" in df_with_clusters.columns)
 
+    def tearDown(self) -> None:
+        return super().tearDown()
 
-# Add more tests as needed...
 
 if __name__ == "__main__":
     unittest.main()

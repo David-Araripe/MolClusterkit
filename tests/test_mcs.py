@@ -47,16 +47,17 @@ class TestMCS(unittest.TestCase):
             mcs_cluster.compute_similarity_matrix()
             kwargs = self.kwargs[alg] if alg in self.kwargs else {}
             labels = mcs_cluster.cluster_molecules(algorithm=alg, **kwargs)
-            self.assertLess(len(labels), len(self.smiles))
+            self.assertEqual(len(labels), len(smiles_list))
 
     def test_big_data(self):
         mcs_cluster = MCSClustering(self.smiles)
         mcs_cluster.compute_similarity_matrix()
-        labels = mcs_cluster.cluster_molecules(algorithm="DBSCAN")
-        self.assertLess(len(labels), len(self.smiles))
+        labels = mcs_cluster.cluster_molecules(algorithm="Hierarchical", t=2)
+        self.assertEqual(len(labels), len(self.smiles))
 
+    def tearDown(self) -> None:
+        return super().tearDown()
 
-# Add more tests as needed...
 
 if __name__ == "__main__":
     unittest.main()
