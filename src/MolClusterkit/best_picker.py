@@ -52,6 +52,7 @@ def mcs_based_clustering(
     algorithm="DBSCAN",
     pick_best=False,
     n_jobs=12,
+    timeout=1.5,
     **kwargs,
 ):
     """Perform MCS based clustering on the given dataframe.
@@ -69,7 +70,7 @@ def mcs_based_clustering(
     if score_cutoff is not None:
         df = df.query(f"{score_col} > {score_cutoff}")
     smiles_list = df[smiles_col].tolist()
-    mcs_cluster = MCSClustering(smiles_list)
+    mcs_cluster = MCSClustering(smiles_list, timeout=timeout)
     mcs_cluster.compute_similarity_matrix(n_jobs=n_jobs)
     labels = mcs_cluster.cluster_molecules(algorithm=algorithm.lower(), **kwargs)
     df = df.assign(cluster_id=labels)

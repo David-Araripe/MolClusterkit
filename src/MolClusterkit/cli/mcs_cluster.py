@@ -11,6 +11,7 @@ mcscluster --data_path <path_to_data> \
     --score_cutoff 7.0 \
     --score_col <e.g. pchembl_value> \
     --n_jobs 12
+    --timeout 1.5
 """
 
 import argparse
@@ -82,6 +83,16 @@ def parse_arguments():
         help="Whether to pick the best scoring compound from each cluster.",
         default=False,
     )
+    parser.add_argument(
+        "--timeout",
+        help=(
+            "Timeout time for the maximum common substructure algorithm. Input is the "
+            "wall-clock seconds that the algorithm will use to find the MCS. "
+            "Defaults to 1.5 seconds."
+        ),
+        default=1.5,
+        type=float,
+    )
     return parser.parse_args()
 
 
@@ -109,6 +120,7 @@ if __name__ == "__main__":
         algorithm=args.algorithm,
         pick_best=args.pick_best,
         n_jobs=args.n_jobs,
+        timeout=args.timeout,
         **kwargs,
     )
     clustered_df.to_csv(
