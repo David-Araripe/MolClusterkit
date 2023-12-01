@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Module for picking the best compounds within a dataframe using butina clustering.
+r"""Module for picking the best compounds within a dataframe using butina clustering.
 
 For the preparation of datasets before querying SmallWorld, it could be ran as:
 
-butinacluster --data_path <path_to_data> \
-    --smiles_col touse_smiles \
-    --score_col pchembl_value_median \
-    --cutoff 0.7 \
-    --score_cutoff 7.0 \
-    --score_col <e.g. pchembl_value> \
-    --n_jobs 12
+butinacluster -i "path/to/data.smi" \                # --input_path
+    -smic "touse_smiles" \                           # --smiles_col
+    -scor "pchembl_value_median" \                   # --score_col
+    -cut 7.0 \                                       # --score_cutoff
+    -dist 0.35 \                                     # --dist_th
+    -j 12 \                                          # --n_jobs
+    -p \                                             # --pick_best
+    -o "path/to/output.csv"                          # --output_path
 """
 
 import argparse
@@ -29,19 +30,25 @@ def parse_arguments():
         )
     )
     parser.add_argument(
-        "--data_path",
+        "--input_path",
+        "-i",
+        dest="input_path",
         type=str,
         required=True,
-        help="Path created by ModelBuilderABC.generate_results.",
+        help="Path to the dataframe or .smi file with the SMILES to be clustered.",
     )
     parser.add_argument(
         "--smiles_col",
+        "-smic",
+        dest="smiles_col",
         type=str,
-        required=True,
-        help="Path to the file containing the molecules to screen.",
+        required=False,
+        help="Column name containing the SMILES representation of molecules. (if input is a dataframe...)",
     )
     parser.add_argument(
         "--score_col",
+        "-scor",
+        dest="score_col",
         type=str,
         help="Column name containing the scores to pick the best from.",
         required=False,
@@ -49,51 +56,91 @@ def parse_arguments():
     )
     parser.add_argument(
         "--score_cutoff",
+        "-cut",
+        dest="score_cutoff",
         type=str,
         help="Only cluster compounds where score_col > score_cutoff.",
         required=False,
         default=None,
     )
     parser.add_argument(
-        "--cutoff",
-        type=float,
-        default=0.25,
+        "--dist_th",
+        "-dist",
+        dest="dist_th",
+        required=False,
+        default=0.35,
         help=(
-            "Cutoff for the butina clustering. The lower the value, "
-            "the higher the amount of obtained clusters."
+            "distance threshold for the butina clustering algorithm. The lower the value "
+            "the higher the amount of obtained clusters (and the more similar the compounds "
+            "in each cluster). Defaults to 0.35."
         ),
     )
     parser.add_argument(
+        "--n_jobs",
+        "-j",
+        dest="n_jobs",
+        type=int,
+        default=12,
+        required=False,
+        help="Number of jobs to run in parallel.",
+    )
+    parser.add_argument(
         "--pick_best",
+        "-p",
+        dest="pick_best",
         help="Whether to pick the best scoring compound from each cluster.",
         default=False,
+    )
+    parser.add_argument(
+        "--output_path",
+        "-o",
+        dest="output_path",
+        help=(
+            "Path to save the clustered dataframe. If not provided, will save in the "
+            "same folder as the input data with "
+        ),
+        required=False,
+        default=None,
     )
     parser.add_argument("--njobs", type=int, default=12, help="Number of jobs.")
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main():
+    """Main function for the butina clustering."""
     args = parse_arguments()
-    if Path(args.data_path).suffix in [".gz", ".csv"]:
-        df = pd.read_csv(args.data_path)
-    elif Path(args.data_path).suffix == ".smi":
-        smiles = Path(args.data_path).read_text().splitlines()
-        df = pd.DataFrame(smiles, columns=[args.smiles_col])
+    if Path(args.input_path).suffix in [".gz", ".csv", ".tsv"]:
+        if Path(args.input_path).suffix == ".tsv":
+            sep = "\t"
+        else:
+            sep = ","
+        data = pd.read_csv(args.input_path, sep=sep)
+    elif Path(args.input_path).suffix == ".smi":
+        data = Path(args.input_path).read_text().splitlines()
         assert all(
             [args.score_col is None, args.score_cutoff is None]
         ), "If a SMILES file is provided, no score column should be provided."
     else:
         raise ValueError(
             "Data path should be a .csv, .gz or .smi file, but "
-            f"{args.data_path} was provided."
+            f"{args.input_path} was provided."
         )
-    butina_based_clustering(
-        df,
+    clustered_data: pd.DataFrame = butina_based_clustering(
+        data,
         smiles_col=args.smiles_col,
         score_col=args.score_col,
         score_cutoff=args.score_cutoff,
-        cutoff=args.cutoff,
-        save_path=f"{args.data_path}_std_out_butina{int(args.cutoff*100)}.csv",
-        pick_best=args.pick_best,
+        dist_th=args.dist_th,
         njobs=args.njobs,
+        pick_best=args.pick_best,
     )
+    if args.output_path is None:
+        fname = Path(args.input_path).name.split(".")[0]
+        output_path = f"{fname}_butina_{int(args.dist_th*100)}_clustered.csv"
+    else:
+        output_path = args.output_path
+    clustered_data.to_csv(output_path, index=False)
+
+
+if __name__ == "__main__":
+    main()

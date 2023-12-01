@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Module for clustering compounds within a dataframe using MCS clustering.
+r"""Module for clustering compounds within a dataframe using MCS clustering.
 
 Usage example:
 
-mcscluster --data_path <path_to_data> \
-    --smiles_col touse_smiles \
-    --score_col pchembl_value_median \
-    --algorithm "DBSCAN" \
-    --kwargs '{"eps": 0.3}' \
-    --score_cutoff 7.0 \
-    --score_col <e.g. pchembl_value> \
-    --n_jobs 12
-    --timeout 1.5
+mcscluster -i "path/to/data.smi" \              # --input_path
+    -smic "touse_smiles" \                      # --smiles_col
+    -scor "pchembl_value_median" \              # --score_col
+    -cut 7.0 \                                  # --score_cutoff
+    -a "DBSCAN" \                               # --algorithm
+    -k '{"eps": 0.3}' \                         # --kwargs
+    -j 12 \                                     # --n_jobs
+    -p \                                        # --pick_best
+    -to 1.5 \                                   # --timeout
+    -mcs '{"AtomCompare": "CompareElements"}' \ # --mcs_kwargs
+    -o "path/to/output.csv"                     # --output_path
 """
 
 import argparse
@@ -32,19 +34,25 @@ def parse_arguments():
         )
     )
     parser.add_argument(
-        "--data_path",
+        "--input_path",
+        "-i",
+        dest="input_path",
         type=str,
         required=True,
-        help="Path to the dataframe containing the molecules to cluster.",
+        help="Path to the dataframe or .smi file with the SMILES to be clustered.",
     )
     parser.add_argument(
         "--smiles_col",
+        "-smic",
+        dest="smiles_col",
         type=str,
-        required=True,
-        help="Column name containing the SMILES representation of molecules.",
+        required=False,
+        help="Column name containing the SMILES representation of molecules. (if input is a dataframe...)",
     )
     parser.add_argument(
         "--score_col",
+        "-scor",
+        dest="score_col",
         type=str,
         help="Column name containing the scores to pick the best from.",
         required=False,
@@ -52,6 +60,8 @@ def parse_arguments():
     )
     parser.add_argument(
         "--score_cutoff",
+        "-cut",
+        dest="score_cutoff",
         type=str,
         help="Only cluster compounds where score_col > score_cutoff.",
         required=False,
@@ -59,6 +69,8 @@ def parse_arguments():
     )
     parser.add_argument(
         "--algorithm",
+        "-a",
+        dest="algorithm",
         type=str,
         default="DBSCAN",
         help=(
@@ -68,52 +80,80 @@ def parse_arguments():
     )
     parser.add_argument(
         "--kwargs",
+        "-k",
+        dest="kwargs",
         type=str,
         default="{}",
         help="Additional keyword arguments for clustering algorithm in JSON format.",
     )
     parser.add_argument(
         "--n_jobs",
+        "-j",
+        dest="n_jobs",
         type=int,
-        default=12,
+        default=8,
         help="Number of jobs to run in parallel.",
     )
     parser.add_argument(
         "--pick_best",
+        "-p",
+        dest="pick_best",
         help="Whether to pick the best scoring compound from each cluster.",
         default=False,
     )
     parser.add_argument(
         "--timeout",
+        "-to",
+        dest="timeout",
         help=(
             "Timeout time for the maximum common substructure algorithm. Input is the "
             "wall-clock seconds that the algorithm will use to find the MCS. "
             "Defaults to 1.5 seconds."
         ),
-        default=1.5,
+        default=15,
         type=float,
+        required=False,
+    )
+    parser.add_argument(
+        "--mcs_kwargs",
+        "-mcs",
+        dest="mcs_kwargs",
+        help="Additional keyword arguments for MCS algorithm in JSON format. (see mcs.MCS_CONFIGS))",
+        default="{}",
+    )
+    parser.add_argument(
+        "--output_path",
+        "-o",
+        dest="output_path",
+        help="Path to save the clustered dataframe.",
+        default=None,
+        required=False,
     )
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main():
     args = parse_arguments()
-    if Path(args.data_path).suffix in [".gz", ".csv"]:
-        df = pd.read_csv(args.data_path)
-    elif Path(args.data_path).suffix == ".smi":
-        smiles = Path(args.data_path).read_text().splitlines()
-        df = pd.DataFrame(smiles, columns=[args.smiles_col])
+    if Path(args.input_path).suffix in [".gz", ".csv", ".tsv"]:
+        if Path(args.input_path).suffix == ".tsv":
+            sep = "\t"
+        else:
+            sep = ","
+        data = pd.read_csv(args.input_path, sep=sep)
+    elif Path(args.input_path).suffix == ".smi":
+        data = Path(args.input_path).read_text().splitlines()
         assert all(
             [args.score_col is None, args.score_cutoff is None]
         ), "If a SMILES file is provided, no score column should be provided."
     else:
         raise ValueError(
             "Data path should be a .csv, .gz or .smi file, but "
-            f"{args.data_path} was provided."
+            f"{args.input_path} was provided."
         )
+    mcs_kwargs = json.loads(args.mcs_kwargs)
     kwargs = json.loads(args.kwargs)
     clustered_df = mcs_based_clustering(
-        df,
+        data,
         smiles_col=args.smiles_col,
         score_col=args.score_col,
         score_cutoff=args.score_cutoff,
@@ -121,8 +161,16 @@ if __name__ == "__main__":
         pick_best=args.pick_best,
         n_jobs=args.n_jobs,
         timeout=args.timeout,
+        mcs_kwargs=mcs_kwargs,
         **kwargs,
     )
-    clustered_df.to_csv(
-        f"{args.data_path}_mcs_{args.algorithm}_clustered.csv", index=False
-    )
+    if args.output_path is None:
+        fname = Path(args.input_path).name.split(".")[0]
+        output_path = f"{fname}_mcs_{args.algorithm}_clustered.csv"
+    else:
+        output_path = args.output_path
+    clustered_df.to_csv(output_path, index=False)
+
+
+if __name__ == "__main__":
+    main()

@@ -13,13 +13,7 @@ from rdkit.Chem import AllChem
 from rdkit.ML.Cluster import Butina
 from tqdm import tqdm
 
-
-def reset_index_if_needed(df: pd.DataFrame) -> pd.DataFrame:
-    """Function that checks if the dataframe index is reset. If not, resets it."""
-    if not np.array_equal(np.array(range(len(df))), df.index.values):
-        logger.warning("DataFrame index is not reset... Will reset it now.")
-        df.reset_index(drop=True, inplace=True)
-    return df
+from .misc import TanimotoDist
 
 
 class ButinaClustering:
@@ -30,15 +24,16 @@ class ButinaClustering:
     - smiles_list (List[str]): List of input SMILES strings.
     - njobs (int): Number of jobs for parallel processing.
     - fingerprints (List): Computed fingerprints for the input SMILES.
-    - mol_clusters (List): Clusters of molecules after performing clustering.
+    - mol_clusters (Tuple[Tuple]): A tuple of tuples with indexes within each cluster.
+    - similarity_matrix (np.ndarray): A similarity matrix for the input SMILES, computed
+        after applying calling the `cluster_molecules` or the `taylor_butina_clustering` methods.
 
     Usage example:
     >>> smiles_list = [...]  # Your list of SMILES
     >>> bclusterer = ButinaClustering(smiles_list)
-    >>> bclusterer.cluster(cutoff=0.4)
-    >>> df_with_clusters = bclusterer.assign_clusters_to_dataframe(
-    >>>     df, score_col="score_column_name"
-    >>> )
+    >>> clusters = bclusterer.cluster_molecules(dist_th=0.4)
+    >>> # if you want to assign the clusters to a dataframe:
+    >>> df = df.assign(cluster_id = clusters)
     """
 
     def __init__(self, smiles_list: List[str], njobs: int = 8):
@@ -52,6 +47,7 @@ class ButinaClustering:
         self.njobs = njobs
         self.fingerprints = self._compute_fingerprints()
         self.mol_clusters = None
+        self.similarity_matrix = None
 
     def _compute_fingerprints(self, show_progress=True, radius: int = 2) -> List:
         """Compute fingerprints for the given SMILES list.
@@ -74,84 +70,67 @@ class ButinaClustering:
     def smi2fp(smi, radius: int = 2):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
-            logger.warning(f"Invalid SMILES detected: {smi}")
+            logger.error(f"Invalid SMILES detected: {smi}")
             return None
         return AllChem.GetMorganFingerprintAsBitVect(mol, radius)
 
-    def cluster(self, cutoff: float = 0.35):
-        self.mol_clusters = self.taylor_butina_clustering(
-            self.fingerprints, cutoff=cutoff
-        )
-        return self.mol_clusters
+    def cluster_molecules(self, dist_th: float = 0.35):
+        """cluster the molecules based on the butina algorithm. Returns the clusters
+        as a list of lists of indices.
 
-    @staticmethod
-    def taylor_butina_clustering(fingerprints: List, cutoff: float = 0.35):
+        Args:
+            dist_th: tanimoto distance threshold. for the butina clustering algorithm.
+                The lower the value, the higher the amount of obtained clusters (and
+                the more similar the compounds in each cluster). Defaults to 0.35.
+
+        Returns:
+            np.ndarray: array of cluster ids for each molecule.
+        """
+        self.mol_clusters = self.taylor_butina_clustering(
+            self.fingerprints, dist_th=dist_th
+        )
+        cluster_id_list = np.zeros(len(self.fingerprints), dtype=int)
+        for cluster_num, cluster in enumerate(self.mol_clusters):
+            cluster_id_list[list(cluster)] = cluster_num
+        return cluster_id_list
+
+    def taylor_butina_clustering(
+        self, fps: List, dist_th: float = 0.35
+    ) -> Tuple[Tuple]:
         """Applies the butina clustering algorithm to a list of fingerprints.
 
         Args:
-            fingerprints: fingerprints of compounds to be clustered with the Butina algorith.
-            cutoff: when close to 0, only very similar molecules are considered neighbors and
-                clustered together. When closer to 1, even dissimilar molecules will be considered
-                neighbors and grouped together. Defaults to 0.30.
+            fps: fingerprints of compounds to be clustered with the Butina algorith.
+            dist_th: distance threshold. when close to 0, only very similar molecules are considered
+                neighbors and clustered together. When closer to 1, even dissimilar molecules will
+                be considered neighbors and grouped together. Defaults to 0.35.
+
+        Returns:
+            A tuple of tuples containing the indices of the compounds in each cluster.
         """
 
-        def TanimotoDist(fp1, fp2):
-            sim = DataStructs.TanimotoSimilarity(fp1, fp2)
-            return 1.0 - sim
-
-        dists = []
-        nfps = len(fingerprints)
-        for i in range(1, nfps):
-            sims = DataStructs.BulkTanimotoSimilarity(fingerprints[i], fingerprints[:i])
-            dists.extend([1 - x for x in sims])
-        mol_clusters = Butina.ClusterData(
-            dists, nfps, cutoff, isDistData=True, distFunc=TanimotoDist
+        similarities = []
+        nfps = len(fps)
+        simi_matrix = np.eye(nfps)
+        # calculate the builk tanimoto similarities
+        for i in range(0, nfps):
+            sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[i + 1 :])
+            similarities.extend(sims)
+        similarities = np.array(similarities).flatten()
+        # populate the similarity matrix
+        r, c = np.triu_indices(nfps, 1)  # row, column indices, respectively
+        simi_matrix[r, c] = similarities
+        # add values for the lower triangle
+        simi_matrix += simi_matrix.T - np.eye(nfps)
+        mol_clusters = Butina.ClusterData(  # now we cluster the data
+            1 - similarities,  # convert to distance
+            nfps,
+            dist_th,
+            isDistData=True,
+            distFunc=TanimotoDist,
         )
+        self.similarity_matrix = simi_matrix
         return mol_clusters
-
-    def assign_clusters_to_dataframe(
-        self, df: pd.DataFrame, score_col: str
-    ) -> pd.DataFrame:
-        """Assigns cluster ids to a dataframe based on the butina clustering.
-
-        Args:
-            df: dataframe to assign cluster ids to.
-            score_col: column name containing the score of the compounds.
-
-        Raises:
-            ValueError: if self.cluster has not been run yet.
-
-        Returns:
-            dataframe with cluster ids assigned."""
-        if self.mol_clusters is None:
-            raise ValueError(
-                "Please run clustering first by calling the 'cluster' method."
-            )
-        return self.assign_cluster_ids(self.mol_clusters, df, score_col)
-
-    @staticmethod
-    def assign_cluster_ids(
-        mol_clusters, df: pd.DataFrame, score_col: str
-    ) -> pd.DataFrame:
-        """Assigns cluster ids to a dataframe based on the butina clustering.
-
-        Args:
-            mol_clusters: list of clusters from the butina clustering.
-            df: dataframe to assign cluster ids to.
-            score_col: column name containing the score of the compounds.
-
-        Returns:
-            dataframe with cluster ids assigned.
-        """
-        df = reset_index_if_needed(df)
-        cluster_id_list = np.zeros(len(df), dtype=int)
-        for cluster_num, cluster in enumerate(mol_clusters):
-            cluster_id_list[list(cluster)] = cluster_num
-
-        df = df.assign(cluster_id=cluster_id_list).sort_values(
-            by=["cluster_id", score_col]
-        )
-        return df
 
 
 def plot_butina_scatter(
