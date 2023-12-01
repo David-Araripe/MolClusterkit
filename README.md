@@ -18,12 +18,12 @@ For now, two clustering methods are implemented:
 ```python
 from MolClusterkit import ButinaClustering
 
+df = pd.read_csv(...)  # Your dataframe
 smiles_list = [...]  # Your list of SMILES
 bclusterer = ButinaClustering(smiles_list)
-bclusterer.cluster(cutoff=0.4)
-df_with_clusters = bclusterer.assign_clusters_to_dataframe(
-    df, score_col="score_column_name"
-)
+clusters = bclusterer.cluster_molecules(cutoff=0.4)
+# if you want to assign the clusters your dataframe:
+df = df.assign(cluster_id = clusters)
 ```
 
 ### MCS
@@ -32,9 +32,13 @@ Example:
 from MolClusterkit import MCSClustering
 
 smiles_list = [...]  # Your list of SMILES
-mcs_cluster = MCSClustering(smiles_list, timeout=5)
-mcs_cluster.compute_similarity_matrix()
-labels = mcs_cluster.cluster_molecules(algorithm='DBSCAN')
+mcs_cluster = MCSClustering(smiles_list, timeout=15)
+smarts_arr, similarity_matrix = mcs_cluster.compute_similarity_matrix()
+# Now you can cluster the molecules using any of the methods (see docs for more details):
+clusters = mcs_cluster.dbscan_clustering(...)
+clusters = mcs_cluster.hierarchical_clustering(...)
+clusters = mcs_cluster.graph_based_clustering(...)
+clusters = mcs_cluster.spectral_clustering(...)
 ```
 
 Here, the timeout represents the wall-time in seconds that the algorithm will run for. If the timeout is reached, the algorithm will stop and return the current results. Default value is 1 second.
@@ -48,25 +52,29 @@ MolClusterkit also provides a CLI for clustering molecules using the Butina algo
 ### Usage example;
 ```bash
 # For mcs-based clustering
-mcscluster --data_path <path_to_data> \
-    --smiles_col touse_smiles \
-    --score_col pchembl_value_median \
-    --algorithm "DBSCAN" \
-    --kwargs '{"eps": 0.3}' \
-    --score_cutoff 7.0 \
-    --score_col <e.g. pchembl_value> \
-    --n_jobs 12
+mcscluster -i "path/to/data.csv" \              # --input_path
+    -smic "SMILES" \                            # --smiles_col
+    -scor "pIC50" \  # example..                # --score_col
+    -cut 7.0 \                                  # --score_cutoff
+    -a "DBSCAN" \                               # --algorithm
+    -k '{"eps": 0.3}' \                         # --kwargs
+    -j 12 \                                     # --n_jobs
+    -p \                                        # --pick_best
+    -to 1.5 \                                   # --timeout
+    -mcs '{"AtomCompare": "CompareElements"}' \ # --mcs_kwargs
+    -o "path/to/output.csv"                     # --output_path
 
 # For butina-based clustering
-butinacluster --data_path <path_to_data> \
-    --smiles_col touse_smiles \
-    --score_col pchembl_value_median \
-    --cutoff 0.7 \
-    --score_cutoff 7.0 \
-    --score_col <e.g. pchembl_value> \
-    --n_jobs 12
-    --timeout 1.5
-    # TODO: this one is still not nicely implemented...
+butinacluster -i "path/to/data.csv" \                # --input_path
+    -smic "SMILES" \                                 # --smiles_col
+    -scor "pIC50" \  # example..                     # --score_col
+    -cut 7.0 \                                       # --score_cutoff
+    -dist 0.35 \                                     # --dist_th
+    -j 12 \                                          # --n_jobs
+    -p \                                             # --pick_best
+    -o "path/to/output.csv"                          # --output_path
 ```
 
-By doing so, you can read both `.smi` and `.csv` files. While working with `.smi` files, options related to scores are not available. The `.smi` option will default as if file contained only a single SMILES per line.
+Both commands support calling on `.smi`, `tsv` and `.csv` files. While working with `.smi` files, options related to scores are not available. The `.smi` option will default as if file contained only a single SMILES per line.
+
+For more information, run `mcscluster -h` or `butinacluster -h`.
