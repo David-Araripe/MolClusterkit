@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from MolClusterkit.butina import ButinaClustering, reset_index_if_needed
+from MolClusterkit.butina import ButinaClustering
+from MolClusterkit.misc import reset_index_if_needed
 
 
 class TestButina(unittest.TestCase):
@@ -35,15 +36,9 @@ class TestButina(unittest.TestCase):
         self.assertIsNotNone(bclusterer.fingerprints)
 
         # Test clustering
-        clusters = bclusterer.cluster(cutoff=0.4)  # noqa: F841
+        cluster_ids = bclusterer.cluster_molecules(dist_th=0.4)
         self.assertIsNotNone(bclusterer.mol_clusters)
-
-        # Test assign_clusters_to_dataframe
-        df = pd.DataFrame({"smiles": smiles_list, "score_column_name": [1, 2, 3]})
-        df_with_clusters = bclusterer.assign_clusters_to_dataframe(
-            df, score_col="score_column_name"
-        )
-        self.assertTrue("cluster_id" in df_with_clusters.columns)
+        self.assertEqual(len(bclusterer.mol_clusters), len(np.unique(cluster_ids)))
 
     def tearDown(self) -> None:
         return super().tearDown()

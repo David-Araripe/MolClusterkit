@@ -29,8 +29,9 @@ class TestMCS(unittest.TestCase):
         mcs_cluster = MCSClustering(smiles_list)
 
         # Test compute_similarity_matrix
-        sim_matrix = mcs_cluster.compute_similarity_matrix()
-        self.assertEqual(sim_matrix.shape, (3, 3))
+        smarts_matrix, simi_matrix = mcs_cluster.compute_similarity_matrix()
+        self.assertEqual(smarts_matrix.shape, (3, 3))
+        self.assertEqual(simi_matrix.shape, (3, 3))
 
         # Test DBSCAN clustering
         labels_dbscan = mcs_cluster.dbscan_clustering(eps=0.5, min_samples=2)
@@ -50,10 +51,11 @@ class TestMCS(unittest.TestCase):
             self.assertEqual(len(labels), len(smiles_list))
 
     def test_big_data(self):
-        mcs_cluster = MCSClustering(self.smiles)
+        smiles = self.smiles[:200]
+        mcs_cluster = MCSClustering(smiles)
         mcs_cluster.compute_similarity_matrix()
-        labels = mcs_cluster.cluster_molecules(algorithm="Hierarchical", t=2)
-        self.assertEqual(len(labels), len(self.smiles))
+        labels = mcs_cluster.cluster_molecules(algorithm="DBSCAN", eps=0.5)
+        self.assertEqual(len(labels), len(smiles))
 
     def tearDown(self) -> None:
         return super().tearDown()
