@@ -41,9 +41,11 @@ clusters = mcs_cluster.graph_based_clustering(...)
 clusters = mcs_cluster.spectral_clustering(...)
 ```
 
-Here, the timeout represents the wall-time in seconds that the algorithm will run for. If the timeout is reached, the algorithm will stop and return the current results. Default value is 1 second.
+Here, the timeout represents the wall-time in seconds that the algorithm will run for. If the timeout is reached, the algorithm will stop and return the current results. Default value is 15 seconds.
 
 Note, this implementation just wraps RDKit's maximum common substructure algorithm. Check [here](https://www.rdkit.org/docs/source/rdkit.Chem.MCS.html#:~:text=The%20MCS%20algorithm,%3E%3E%3E) for more details on the timeout parameter.
+
+The similarity scores obtained from `compute_similarity_matrix` is the fraction of atoms in the MCS over the total number of atoms in the smaller molecule. The obtained matrix is a square matrix with the similarity scores between all molecules in the dataset.
 
 ## CLI
 
