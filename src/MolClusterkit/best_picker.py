@@ -56,7 +56,6 @@ def butina_based_clustering(
         bclusterer = ButinaClustering(smiles_list, njobs=njobs)
         cluster_ids = bclusterer.cluster_molecules(dist_th=dist_th)
         data = data.assign(cluster_id=cluster_ids)
-        data = bclusterer.assign_clusters_to_dataframe(data, score_col=score_col)
         if all([pick_best, score_col is not None]):
             data = data.groupby("cluster_id").apply(
                 lambda x: x.loc[x[score_col].idxmax()]

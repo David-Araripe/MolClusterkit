@@ -57,6 +57,7 @@ class ButinaClustering:
 
         Returns:
             List: List of computed fingerprints."""
+        logger.info("Computing fingerprints...")
         if show_progress:
             smiles_list = tqdm(self.smiles_list, total=len(self.smiles_list))
         else:

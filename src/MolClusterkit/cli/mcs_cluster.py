@@ -98,8 +98,8 @@ def parse_arguments():
         "--pick_best",
         "-p",
         dest="pick_best",
-        help="Whether to pick the best scoring compound from each cluster.",
-        default=False,
+        help="Activate the behaviour that the best scoring compound will be pickedfrom each cluster.",
+        action="store_true",
     )
     parser.add_argument(
         "--timeout",

@@ -69,6 +69,7 @@ def parse_arguments():
         dest="dist_th",
         required=False,
         default=0.35,
+        type=float,
         help=(
             "distance threshold for the butina clustering algorithm. The lower the value "
             "the higher the amount of obtained clusters (and the more similar the compounds "
@@ -88,8 +89,8 @@ def parse_arguments():
         "--pick_best",
         "-p",
         dest="pick_best",
-        help="Whether to pick the best scoring compound from each cluster.",
-        default=False,
+        help="Activate the behaviour that the best scoring compound will be pickedfrom each cluster.",
+        action="store_true",
     )
     parser.add_argument(
         "--output_path",
@@ -102,7 +103,6 @@ def parse_arguments():
         required=False,
         default=None,
     )
-    parser.add_argument("--njobs", type=int, default=12, help="Number of jobs.")
     return parser.parse_args()
 
 
@@ -131,7 +131,7 @@ def main():
         score_col=args.score_col,
         score_cutoff=args.score_cutoff,
         dist_th=args.dist_th,
-        njobs=args.njobs,
+        njobs=args.n_jobs,
         pick_best=args.pick_best,
     )
     if args.output_path is None:
