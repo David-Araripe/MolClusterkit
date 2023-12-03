@@ -48,9 +48,14 @@ def butina_based_clustering(
             smiles_col = find_smiles_column(data)
         if score_cutoff is not None:
             data = data.query(f"{score_col} > {score_cutoff}")
+            if data.shape[0] == 0:
+                raise ValueError(
+                    f"No compounds with a score above {score_cutoff} were found."
+                )
         smiles_list = data[smiles_col].tolist()
         bclusterer = ButinaClustering(smiles_list, njobs=njobs)
-        bclusterer.cluster_molecules(dist_th=dist_th)
+        cluster_ids = bclusterer.cluster_molecules(dist_th=dist_th)
+        data = data.assign(cluster_id=cluster_ids)
         data = bclusterer.assign_clusters_to_dataframe(data, score_col=score_col)
         if all([pick_best, score_col is not None]):
             data = data.groupby("cluster_id").apply(
@@ -110,6 +115,10 @@ def mcs_based_clustering(
             smiles_col = find_smiles_column(data)
         if score_cutoff is not None:
             data = data.query(f"{score_col} > {score_cutoff}")
+            if data.shape[0] == 0:
+                raise ValueError(
+                    f"No compounds with a score above {score_cutoff} were found."
+                )
         smiles_list = data[smiles_col].tolist()
         mcs_cluster = MCSClustering(smiles_list, timeout=timeout, **mcs_kwargs)
         mcs_cluster.compute_similarity_matrix(n_jobs=n_jobs)
