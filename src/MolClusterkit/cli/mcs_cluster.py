@@ -23,6 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..best_picker import mcs_based_clustering
+from .utils import process_output_dir
 
 
 def parse_arguments():
@@ -125,9 +126,13 @@ def parse_arguments():
         "--output_path",
         "-o",
         dest="output_path",
-        help="Path to save the clustered dataframe.",
-        default=None,
+        help=(
+            "Path to save the clustered dataframe. If not provided, will save in the "
+            "same directory as the input data, with information on how the clustering "
+            "was performed. e.g.: `{fname}_mcs_{args.algorithm}_clustered.csv`"
+        ),
         required=False,
+        default=None,
     )
     return parser.parse_args()
 
@@ -164,11 +169,7 @@ def main():
         mcs_kwargs=mcs_kwargs,
         **kwargs,
     )
-    if args.output_path is None:
-        fname = Path(args.input_path).name.split(".")[0]
-        output_path = f"{fname}_mcs_{args.algorithm}_clustered.csv"
-    else:
-        output_path = args.output_path
+    output_path = process_output_dir(args, cli="mcs")
     clustered_df.to_csv(output_path, index=False)
 
 
