@@ -18,4 +18,4 @@ def process_output_dir(args: argparse.Namespace, cli: str) -> Path:
     else:
         fname = Path(output_path).name
         output_dir = Path(output_path).parent
-    return fname / output_dir
+    return output_dir / fname
