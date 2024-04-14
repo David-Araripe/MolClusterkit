@@ -1,2 +1,4 @@
 # -*- coding: utf-8 -*-
-__version__ = "0.2.2"
+from .version_helper import get_version
+
+__version__ = get_version()

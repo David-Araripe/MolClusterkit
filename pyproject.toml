@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=64", "setuptools_scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -47,6 +47,9 @@ mcscluster = "MolClusterkit.cli.mcs_cluster:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "MolClusterkit.__version__" }
+
+[tool.setuptools_scm]
+write_to = "src/MolClusterkit/_version.py"
 
 [tool.isort]
 profile = "black"
