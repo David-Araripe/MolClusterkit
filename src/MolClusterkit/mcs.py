@@ -103,7 +103,7 @@ class MCSClustering:
         min_atoms = min(mols[0].GetNumAtoms(), mols[1].GetNumAtoms())
         return mcs_result.smartsString, mcs_result.numAtoms / min_atoms
 
-    def _pairwise_mcs_similarity(self, smipair) -> Tuple[List[str], List[float]]:
+    def pairwise_mcs_similarity(self, smipair) -> Tuple[List[str], List[float]]:
         """Helper function to compute similarity of molecule pair i and j."""
         smarts_string, similarity = self._mcs_similarity(smipair=smipair)
         return smarts_string, similarity
@@ -129,9 +129,8 @@ class MCSClustering:
         pairs = list(combinations(self.smiles_list, 2))
         if show_progress:
             pairs = tqdm(pairs, total=len(pairs))
-        results = [self._mcs_similarity(p) for p in pairs]
         results = Parallel(n_jobs=n_jobs)(
-            delayed(self._pairwise_mcs_similarity)(p) for p in pairs
+            delayed(self.pairwise_mcs_similarity)(p) for p in pairs
         )
         smarts_strings, similarities = zip(*results)
         # take the indices of the upper triangle and populate the matrix
