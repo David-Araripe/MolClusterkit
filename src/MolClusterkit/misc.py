@@ -4,8 +4,9 @@ import re
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 from rdkit import DataStructs
+
+from .logger import logger
 
 
 def find_smiles_column(df: pd.DataFrame) -> str:

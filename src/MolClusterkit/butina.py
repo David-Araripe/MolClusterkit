@@ -7,12 +7,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from loguru import logger
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
 from rdkit.ML.Cluster import Butina
 from tqdm import tqdm
 
+from .logger import logger
 from .misc import TanimotoDist
 
 

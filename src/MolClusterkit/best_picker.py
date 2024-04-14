@@ -4,9 +4,9 @@ from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 
 from .butina import ButinaClustering
+from .logger import logger
 from .mcs import MCSClustering
 from .misc import find_smiles_column
 

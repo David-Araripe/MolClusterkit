@@ -6,13 +6,14 @@ from typing import List, Tuple
 import networkx as nx
 import numpy as np
 from joblib import Parallel, delayed
-from loguru import logger
 from networkx.algorithms import community
 from rdkit import Chem
 from rdkit.Chem import rdFMCS
 from scipy.cluster.hierarchy import fcluster, linkage
 from sklearn.cluster import DBSCAN, SpectralClustering
 from tqdm import tqdm
+
+from .logger import logger
 
 MCS_CONFIGS = {
     "AtomCompare": {
