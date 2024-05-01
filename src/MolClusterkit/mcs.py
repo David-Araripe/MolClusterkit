@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from .logger import logger
 
-MCS_CONFIGS = {
+MCS_COMPARE_CONFIGS = {
     "atomCompare": {
         "CompareAny": rdFMCS.AtomCompare.CompareAny,
         "CompareAnyHeavyAtom": rdFMCS.AtomCompare.CompareAnyHeavyAtom,
@@ -32,6 +32,16 @@ MCS_CONFIGS = {
         "PermissiveRingFusion": rdFMCS.RingCompare.PermissiveRingFusion,
         "StrictRingFusion": rdFMCS.RingCompare.StrictRingFusion,
     },
+}
+
+MCS_CONFIGS = {  # all args in https://rdkit.org/docs/source/rdkit.Chem.rdFMCS.html
+    "maximizeBonds": bool,
+    "threshold": float,
+    "verbose": bool,
+    "matchValences": bool,
+    "ringMatchesRingOnly": bool,
+    "completeRingsOnly": bool,
+    "matchChiralTag": bool,
 }
 
 
@@ -84,11 +94,13 @@ class MCSClustering:
         """Setup the MCS configurations."""
         for key, value in mcs_kwargs.items():
             if key in ["atomCompare", "bondCompare", "ringCompare"]:
-                self.mcs_kwargs[key] = MCS_CONFIGS[key][value]
+                self.mcs_kwargs[key] = MCS_COMPARE_CONFIGS[key][value]
+            elif key in MCS_CONFIGS:
+                self.mcs_kwargs[key] = value
             else:
                 raise ValueError(
                     f"Unsupported MCS configuration: {key}. "
-                    f"Supported configurations are: {list(MCS_CONFIGS.keys())}"
+                    f"Supported configurations are: {list(MCS_COMPARE_CONFIGS.keys())}"
                 )
 
     def _mcs_similarity(self, smipair: Tuple[str, str]):
