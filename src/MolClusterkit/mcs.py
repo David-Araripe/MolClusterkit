@@ -16,18 +16,18 @@ from tqdm import tqdm
 from .logger import logger
 
 MCS_CONFIGS = {
-    "AtomCompare": {
+    "atomCompare": {
         "CompareAny": rdFMCS.AtomCompare.CompareAny,
         "CompareAnyHeavyAtom": rdFMCS.AtomCompare.CompareAnyHeavyAtom,
         "CompareElements": rdFMCS.AtomCompare.CompareElements,
         "CompareIsotopes": rdFMCS.AtomCompare.CompareIsotopes,
     },
-    "BondCompare": {
+    "bondCompare": {
         "CompareAny": rdFMCS.BondCompare.CompareAny,
         "CompareOrder": rdFMCS.BondCompare.CompareOrder,
         "CompareOrderExact": rdFMCS.BondCompare.CompareOrderExact,
     },
-    "RingCompare": {
+    "ringCompare": {
         "IgnoreRingFusion": rdFMCS.RingCompare.IgnoreRingFusion,
         "PermissiveRingFusion": rdFMCS.RingCompare.PermissiveRingFusion,
         "StrictRingFusion": rdFMCS.RingCompare.StrictRingFusion,
@@ -82,8 +82,8 @@ class MCSClustering:
 
     def _setup_mcs_configs(self, **mcs_kwargs):
         """Setup the MCS configurations."""
-        for key, value in self.mcs_kwargs.items():
-            if key in ["AtomCompare", "BondCompare", "RingCompare"]:
+        for key, value in mcs_kwargs.items():
+            if key in ["atomCompare", "bondCompare", "ringCompare"]:
                 self.mcs_kwargs[key] = MCS_CONFIGS[key][value]
             else:
                 raise ValueError(
