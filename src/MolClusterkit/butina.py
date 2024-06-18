@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Module containing the ButinaClustering class and related functions."""
 from functools import partial
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,44 +36,68 @@ class ButinaClustering:
     >>> df = df.assign(cluster_id = clusters)
     """
 
-    def __init__(self, smiles_list: List[str], njobs: int = 8):
+    def __init__(
+        self,
+        smiles_list: List[str],
+        fp_func: Optional[Callable] = None,
+        njobs: int = 8,
+        **fp_kwargs,
+    ):
         """Initialize the Butina clustering class.
 
         Args:
-            smiles_list (List[str]): List of input SMILES strings.
+            smiles_list: List of input SMILES strings.
+            fp_func: Custom function to compute fingerprints. If a custom function is used,
+                it should take a SMILES string as input and return a RDKit bit vector, which
+                will be used by `DataStructs.BulkTanimotoSimilarity`. If None, the default
+                Morgan fingerprint will be used.
             njobs (int, optional): Number of jobs for parallel processing. Defaults to 8.
+            fp_kwargs: Additional keyword arguments to be passed to the fingerprint function.
+                Examples for the default `GetMorganFingerprintAsBitVect` function are `radius`,
+                `nBits`, and `useChirality`.
         """
         self.smiles_list = smiles_list
         self.njobs = njobs
-        self.fingerprints = self._compute_fingerprints()
+        self.fp_kwargs = {**fp_kwargs}
+        self._set_fp_func(fp_func)
+        self.fingerprints = self._compute_fingerprints(**self.fp_kwargs)
         self.mol_clusters = None
         self.similarity_matrix = None
 
-    def _compute_fingerprints(self, show_progress=True, radius: int = 2) -> List:
+    def _set_fp_func(self, fp_func: Optional[Callable]):
+        if fp_func is not None:
+            self.fp_func = partial(fp_func, **self.fp_kwargs)
+        else:
+            self.fp_func = partial(self.smi2fp, **self.fp_kwargs)
+
+    def _compute_fingerprints(self, show_progress=True) -> List:
         """Compute fingerprints for the given SMILES list.
 
         Args:
-            radius (int, optional): Radius for Morgan fingerprint. Defaults to 2.
+            show_progress: Whether to show a progress bar. Defaults to True.
 
         Returns:
             List: List of computed fingerprints."""
         logger.info("Computing fingerprints...")
-        if show_progress:
-            smiles_list = tqdm(self.smiles_list, total=len(self.smiles_list))
-        else:
-            smiles_list = self.smiles_list
+        smiles_list = (
+            tqdm(self.smiles_list, total=len(self.smiles_list))
+            if show_progress
+            else self.smiles_list
+        )
         fingerprints = Parallel(n_jobs=self.njobs)(
-            delayed(partial(self.smi2fp, radius=radius))(smi) for smi in smiles_list
+            delayed(self.fp_func)(smi) for smi in smiles_list
         )
         return [fp for fp in fingerprints if fp is not None]
 
     @staticmethod
-    def smi2fp(smi, radius: int = 2):
+    def smi2fp(smi, radius: int = 2, nBits=2048, useChirality=False, **kwargs):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
             logger.error(f"Invalid SMILES detected: {smi}")
             return None
-        return AllChem.GetMorganFingerprintAsBitVect(mol, radius)
+        return AllChem.GetMorganFingerprintAsBitVect(
+            mol, radius, nBits=nBits, useChirality=useChirality, **kwargs
+        )
 
     def cluster_molecules(self, dist_th: float = 0.35):
         """cluster the molecules based on the butina algorithm. Returns the clusters
