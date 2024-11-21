@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Module containing the MCS clustering class."""
 from itertools import combinations
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
@@ -59,13 +59,17 @@ class MCSClustering:
     >>> labels = mcs_cluster.cluster_molecules(algorithm='DBSCAN')
     """
 
-    def __init__(self, smiles_list, timeout=15, **mcs_kwargs):
+    def __init__(
+        self, smiles_list=None, timeout=15, np_dtypes=np.float32, **mcs_kwargs
+    ):
         """Initialize the Maximum Common Substructure (MCS) clustering class with a
         list of SMILES.
 
         Args:
             smiles_list: a list of smiles.
             timeout: a timeout for the MCS computation in seconds. Defaults to 1.5.
+            np_dtypes: numpy data type for the similarity matrix or arrays.
+                Defaults to np.float32.
             mcs_kwargs: keyword arguments for the MCS algorithm. Will be parsed based
                 on the values from MCS_CONFIGS.
 
@@ -78,6 +82,7 @@ class MCSClustering:
         self.smiles_list = smiles_list
         self.timeout = timeout
         self.similarity_matrix = None
+        self.np_dtypes = np_dtypes
         self.mcs_kwargs = {}
         self._setup_mcs_configs(**mcs_kwargs)
         self._check_low_timeout()
@@ -103,6 +108,11 @@ class MCSClustering:
                     f"Supported configurations are: {list(MCS_COMPARE_CONFIGS.keys())}"
                 )
 
+    def find_mcs_in_many(self, smiles: list[str]):
+        """Find the MCS in many molecules."""
+        mols = [Chem.MolFromSmiles(smi) for smi in smiles]
+        return rdFMCS.FindMCS(mols, timeout=self.timeout, **self.mcs_kwargs)
+
     def _mcs_similarity(self, smipair: Tuple[str, str]):
         """Compute the MCS similarity between two molecules given their SMILES and
         return the fraction of matched atoms to the smaller molecule."""
@@ -122,7 +132,7 @@ class MCSClustering:
         return smarts_string, similarity
 
     def compute_similarity_matrix(
-        self, show_progress=True, n_jobs=8
+        self, smiles_list: Optional[list[str]] = None, show_progress=True, n_jobs=8
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Compute the similarity matrix based on MCS for all molecules.
 
@@ -136,8 +146,10 @@ class MCSClustering:
         """
         # ---- First we compute the similarity matrix ----
         # create the similarity matrix with 1s in the diagonal
+        if smiles_list is not None:
+            self.smiles_list = smiles_list
         n_mols = len(self.smiles_list)
-        simi_matrix = np.eye(n_mols)
+        simi_matrix = np.eye(n_mols, dtype=self.np_dtypes)
         # compute the similarity for all pairs of molecules and unpack results
         pairs = list(combinations(self.smiles_list, 2))
         if show_progress:
@@ -150,7 +162,7 @@ class MCSClustering:
         r, c = np.triu_indices(n_mols, 1)  # row, column indices, respectively
         simi_matrix[r, c] = similarities
         # add values for the lower triangle
-        simi_matrix += simi_matrix.T - np.eye(n_mols)
+        simi_matrix += simi_matrix.T - np.eye(n_mols, dtype=self.np_dtypes)
         # ---- Now we also create the matrix with the SMARTS ----
         smarts_matrix = np.full((n_mols, n_mols), "", dtype=object)
         smarts_matrix[r, c] = smarts_strings

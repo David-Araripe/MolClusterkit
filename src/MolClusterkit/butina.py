@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """Module containing the ButinaClustering class and related functions."""
 from functools import partial
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem
+from rdkit.Chem import rdFingerprintGenerator
 from rdkit.ML.Cluster import Butina
 from tqdm import tqdm
 
@@ -21,11 +21,11 @@ class ButinaClustering:
     A class for clustering molecules using the Butina algorithm.
 
     Attributes:
-    - smiles_list (List[str]): List of input SMILES strings.
-    - njobs (int): Number of jobs for parallel processing.
-    - fingerprints (List): Computed fingerprints for the input SMILES.
-    - mol_clusters (Tuple[Tuple]): A tuple of tuples with indexes within each cluster.
-    - similarity_matrix (np.ndarray): A similarity matrix for the input SMILES, computed
+    - smiles_list: List of input SMILES strings.
+    - njobs: Number of jobs for parallel processing.
+    - fingerprints: Computed fingerprints for the input SMILES.
+    - mol_clusters: A tuple of tuples with indexes within each cluster.
+    - similarity_matrix: A similarity matrix for the input SMILES, computed
         after applying calling the `cluster_molecules` or the `taylor_butina_clustering` methods.
 
     Usage example:
@@ -38,11 +38,12 @@ class ButinaClustering:
 
     def __init__(
         self,
-        smiles_list: List[str],
+        smiles_list: Optional[list[str]],
         fp_func: Optional[Callable] = None,
+        np_dtypes=np.float32,
         njobs: int = 8,
         **fp_kwargs,
-    ):
+    ) -> None:
         """Initialize the Butina clustering class.
 
         Args:
@@ -51,13 +52,16 @@ class ButinaClustering:
                 it should take a SMILES string as input and return a RDKit bit vector, which
                 will be used by `DataStructs.BulkTanimotoSimilarity`. If None, the default
                 Morgan fingerprint will be used.
-            njobs (int, optional): Number of jobs for parallel processing. Defaults to 8.
+            np_dtypes: numpy data type for the similarity matrix or arrays.
+                Defaults to np.float32.
+            njobs: Number of jobs for parallel processing. Defaults to 8.
             fp_kwargs: Additional keyword arguments to be passed to the fingerprint function.
                 Examples for the default `GetMorganFingerprintAsBitVect` function are `radius`,
                 `nBits`, and `useChirality`.
         """
         self.smiles_list = smiles_list
         self.njobs = njobs
+        self.np_dtypes = np_dtypes
         self.fp_kwargs = {**fp_kwargs}
         self._set_fp_func(fp_func)
         self.fingerprints = self._compute_fingerprints(**self.fp_kwargs)
@@ -70,14 +74,14 @@ class ButinaClustering:
         else:
             self.fp_func = partial(self.smi2fp, **self.fp_kwargs)
 
-    def _compute_fingerprints(self, show_progress=True) -> List:
+    def _compute_fingerprints(self, show_progress=True) -> list:
         """Compute fingerprints for the given SMILES list.
 
         Args:
             show_progress: Whether to show a progress bar. Defaults to True.
 
         Returns:
-            List: List of computed fingerprints."""
+            list: list of computed fingerprints."""
         logger.info("Computing fingerprints...")
         smiles_list = (
             tqdm(self.smiles_list, total=len(self.smiles_list))
@@ -90,14 +94,15 @@ class ButinaClustering:
         return [fp for fp in fingerprints if fp is not None]
 
     @staticmethod
-    def smi2fp(smi, radius: int = 2, nBits=2048, useChirality=False, **kwargs):
+    def smi2fp(smi, radius: int = 2, nBits=2048, useChirality=True, **kwargs):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
-            logger.error(f"Invalid SMILES detected: {smi}")
+            print(f"Invalid SMILES detected: {smi}")
             return None
-        return AllChem.GetMorganFingerprintAsBitVect(
-            mol, radius, nBits=nBits, useChirality=useChirality, **kwargs
+        morgan_gen = rdFingerprintGenerator.GetMorganGenerator(
+            radius=radius, fpSize=nBits, includeChirality=useChirality, **kwargs
         )
+        return morgan_gen.GetFingerprint(mol)
 
     def cluster_molecules(self, dist_th: float = 0.35):
         """cluster the molecules based on the butina algorithm. Returns the clusters
@@ -120,8 +125,8 @@ class ButinaClustering:
         return cluster_id_list
 
     def taylor_butina_clustering(
-        self, fps: List, dist_th: float = 0.35
-    ) -> Tuple[Tuple]:
+        self, fps: list, dist_th: float = 0.35
+    ) -> tuple[tuple]:
         """Applies the butina clustering algorithm to a list of fingerprints.
 
         Args:
@@ -136,7 +141,7 @@ class ButinaClustering:
 
         similarities = []
         nfps = len(fps)
-        simi_matrix = np.eye(nfps)
+        simi_matrix = np.eye(nfps, dtype=self.np_dtypes)
         # calculate the builk tanimoto similarities
         for i in range(0, nfps):
             sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[i + 1 :])
@@ -146,7 +151,7 @@ class ButinaClustering:
         r, c = np.triu_indices(nfps, 1)  # row, column indices, respectively
         simi_matrix[r, c] = similarities
         # add values for the lower triangle
-        simi_matrix += simi_matrix.T - np.eye(nfps)
+        simi_matrix += simi_matrix.T - np.eye(nfps, dtype=self.np_dtypes)
         mol_clusters = Butina.ClusterData(  # now we cluster the data
             1 - similarities,  # convert to distance
             nfps,
@@ -164,18 +169,18 @@ def plot_butina_scatter(
     cluster_col="cluster_id",
     score_col="pchembl_value_median",
     color_col: Optional[str] = None,
-) -> Tuple[plt.Figure, plt.Axes]:
+) -> tuple[plt.Figure, plt.Axes]:
     """Plot the clustered molecules from the Butina clustering.
 
     Args:
-        best_clusters_df (pd.DataFrame): Dataframe output from Butina clustering.
-        cutoff (float): Cutoff used in the Butina clustering.
-        cluster_col (str, optional): Column of the dataframe with cluster ids. Defaults to "cluster_id".
-        score_col (str, optional): Column with the score for the y-axis. Defaults to "pchembl_value_median".
-        color_col (str, optional): Column to color the plot with. Defaults to None.
+        best_clusters_df: Dataframe output from Butina clustering.
+        cutoff: Cutoff used in the Butina clustering.
+        cluster_col: Column of the dataframe with cluster ids. Defaults to "cluster_id".
+        score_col: Column with the score for the y-axis. Defaults to "pchembl_value_median".
+        color_col: Column to color the plot with. Defaults to None.
 
     Returns:
-        Tuple[plt.Figure, plt.Axes]: Matplotlib figure and axes objects of the scatter plot.
+        tuple[plt.Figure, plt.Axes]: Matplotlib figure and axes objects of the scatter plot.
     """
     fig, ax = plt.subplots(figsize=(10, 4))
     if color_col is not None:

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Module containing the functions that are used for by the command line interface."""
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,7 @@ from .misc import find_smiles_column
 
 
 def butina_based_clustering(
-    data: Union[pd.DataFrame, List[str], np.ndarray],
+    data: Union[pd.DataFrame, list[str], np.ndarray],
     smiles_col: Optional[str],
     score_col: Optional[str] = None,
     score_cutoff=7.0,
