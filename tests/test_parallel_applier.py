@@ -1,23 +1,28 @@
 import time
 import unittest
 
-from MolClusterkit.parallel_applier import ParallelApplier
+from MolClusterkit.parallel import ParallelApplier
+
+
+def square_func(x):
+    return x * x
+
+
+def slow_square_func(x):
+    time.sleep(0.01)
+    return x * x
 
 
 class TestBaseParallelApplier(unittest.TestCase):
     def setUp(self):
         self.sample_data = list(range(100))
-        self.square_func = lambda x: x * x
-        self.slow_square_func = lambda x: time.sleep(0.01) or x * x
 
     def tearDown(self):
         self.sample_data = None
-        self.square_func = None
-        self.slow_square_func = None
 
     def test_basic_functionality(self):
         applier = ParallelApplier(
-            func=self.square_func,
+            func=square_func,
             iterable=self.sample_data,
             show_progress=False,
             n_jobs=2,
@@ -27,15 +32,15 @@ class TestBaseParallelApplier(unittest.TestCase):
         self.assertEqual(results, [x * x for x in self.sample_data])
 
     def test_empty_iterable(self):
-        applier = ParallelApplier(
-            func=self.square_func, iterable=[], show_progress=False, n_jobs=2
-        )
-        results = applier()
-        self.assertEqual(results, [])
+        with self.assertRaises(ValueError):
+            applier = ParallelApplier(
+                func=square_func, iterable=[], show_progress=False, n_jobs=2
+            )
+            applier()
 
     def test_single_item(self):
         applier = ParallelApplier(
-            func=self.square_func, iterable=[5], show_progress=False, n_jobs=2
+            func=square_func, iterable=[5], show_progress=False, n_jobs=2
         )
         results = applier()
         self.assertEqual(results, [25])
@@ -45,20 +50,19 @@ class TestBaseParallelApplier(unittest.TestCase):
         expected = [x * x for x in self.sample_data]
 
         for backend in backends:
-            with self.subTest(backend=backend):
-                applier = ParallelApplier(
-                    func=self.slow_square_func,
-                    iterable=self.sample_data,
-                    show_progress=False,
-                    n_jobs=2,
-                    backend=backend,
-                )
-                results = applier()
-                self.assertEqual(results, expected)
+            applier = ParallelApplier(
+                func=slow_square_func,
+                iterable=self.sample_data,
+                show_progress=False,
+                n_jobs=2,
+                backend=backend,
+            )
+            results = applier()
+            self.assertEqual(results, expected)
 
     def test_custom_chunk_size(self):
         applier = ParallelApplier(
-            func=self.square_func,
+            func=square_func,
             iterable=self.sample_data,
             show_progress=False,
             n_jobs=2,
@@ -99,7 +103,7 @@ class TestBaseParallelApplier(unittest.TestCase):
     def test_invalid_backend(self):
         with self.assertRaises(ValueError):
             ParallelApplier(
-                func=self.square_func,
+                func=square_func,
                 iterable=self.sample_data,
                 show_progress=False,
                 n_jobs=2,
@@ -124,7 +128,7 @@ class TestBaseParallelApplier(unittest.TestCase):
         sys.stderr = stderr
 
         applier = ParallelApplier(
-            func=self.slow_square_func,
+            func=slow_square_func,
             iterable=self.sample_data[:10],
             show_progress=True,
             n_jobs=2,
@@ -133,15 +137,13 @@ class TestBaseParallelApplier(unittest.TestCase):
         results = applier()
 
         output = stderr.getvalue()
-        sys.stderr = sys.__stderr__
 
-        self.assertIn("Processing chunks", output)
-        self.assertIn("Processing items", output)
+        self.assertIn("Applying slow_square_func to chunks", output)
 
     def test_generator_input(self):
         generator_data = (x for x in range(10))
         applier = ParallelApplier(
-            func=self.square_func,
+            func=square_func,
             iterable=generator_data,
             show_progress=False,
             n_jobs=2,
