@@ -138,7 +138,6 @@ class MCSClustering(BaseClusterer):
         self,
         smiles_list: Optional[list[str]] = None,
         show_progress=True,
-        backend="loky",
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Compute the similarity matrix based on MCS for all molecules.
 
@@ -162,7 +161,6 @@ class MCSClustering(BaseClusterer):
             iterable=pairs,
             n_jobs=self.njobs,
             show_progress=show_progress,
-            backend=backend,
         )
         results = applier()
         smarts_strings, similarities = zip(*results)

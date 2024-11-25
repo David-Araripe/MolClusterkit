@@ -9,6 +9,8 @@ import joblib
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
+from .logger import logger
+
 
 @contextlib.contextmanager
 def tqdm_joblib(tqdm_object):
@@ -59,7 +61,7 @@ class ParallelApplier:
         self.backend = self._set_backend(backend)
         self.total_items = len(self.iterable)
         self.chunk_size = self._set_chunk_size(chunk_size)
-        print("self.chunk_size", self.chunk_size)
+        logger.debug(f"Chunk size: {self.chunk_size}")
 
         if self.total_items == 0:
             raise ValueError("Empty iterable provided.")
