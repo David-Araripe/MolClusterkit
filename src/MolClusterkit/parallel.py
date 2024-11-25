@@ -1,6 +1,7 @@
 """Module for parallel processing of functions with joblib and tqdm for the progress bar"""
 
 import contextlib
+from functools import partial
 from math import ceil
 from typing import Any, Callable, Iterable
 
@@ -84,6 +85,17 @@ class ParallelApplier:
         """
         if not callable(func):
             raise TypeError("func should be a callable function.")
+        if hasattr(func, "__name__"):
+            if func.__name__ == "<lambda>":
+                raise TypeError("parallel_applier does not support lambda functions. ")
+            else:
+                func_name = func.__name__
+        else:
+            if isinstance(func, partial):
+                func_name = func.func.__name__
+            else:
+                func_name = "function"
+        self.func_name = func_name
         return func
 
     def _set_backend(self, backend: str) -> str:
@@ -140,12 +152,12 @@ class ParallelApplier:
         with tqdm_joblib(
             tqdm(
                 total=self.n_chunks,
-                desc=f"Applying {self.func.__name__} to chunks",
+                desc=f"Applying {self.func_name} to chunks",
                 unit="chunk",
                 position=0,
                 leave=True,
             )
-        ) as progress_bar:
+        ) as progress_bar:  # noqa: F841
             results = Parallel(n_jobs=self.n_jobs, backend=self.backend)(
                 delayed(self._process_chunk)(chunk, **kwargs) for chunk in chunks
             )
