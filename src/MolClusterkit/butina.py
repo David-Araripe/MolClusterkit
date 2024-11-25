@@ -6,17 +6,18 @@ from typing import Callable, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from joblib import Parallel, delayed
+from numpy.typing import DTypeLike
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 from rdkit.ML.Cluster import Butina
-from tqdm import tqdm
 
+from .base_clusterer import BaseClusterer
 from .logger import logger
 from .misc import TanimotoDist
+from .parallel import ParallelApplier
 
 
-class ButinaClustering:
+class ButinaClustering(BaseClusterer):
     """
     A class for clustering molecules using the Butina algorithm.
 
@@ -38,9 +39,9 @@ class ButinaClustering:
 
     def __init__(
         self,
-        smiles_list: Optional[list[str]],
+        smiles_list: Optional[list[str]] = None,
         fp_func: Optional[Callable] = None,
-        np_dtypes=np.float32,
+        np_dtypes: DTypeLike = np.float32,
         njobs: int = 8,
         **fp_kwargs,
     ) -> None:
@@ -59,14 +60,10 @@ class ButinaClustering:
                 Examples for the default `GetMorganFingerprintAsBitVect` function are `radius`,
                 `nBits`, and `useChirality`.
         """
-        self.smiles_list = smiles_list
-        self.njobs = njobs
-        self.np_dtypes = np_dtypes
+        super().__init__(smiles_list=smiles_list, njobs=njobs, np_dtypes=np_dtypes)
         self.fp_kwargs = {**fp_kwargs}
         self._set_fp_func(fp_func)
-        self.fingerprints = self._compute_fingerprints(**self.fp_kwargs)
-        self.mol_clusters = None
-        self.similarity_matrix = None
+        self.fingerprints = self.calculate_fingerprints(**self.fp_kwargs)
 
     def _set_fp_func(self, fp_func: Optional[Callable]):
         if fp_func is not None:
@@ -74,23 +71,28 @@ class ButinaClustering:
         else:
             self.fp_func = partial(self.smi2fp, **self.fp_kwargs)
 
-    def _compute_fingerprints(self, show_progress=True) -> list:
+    def calculate_fingerprints(
+        self, smiles: Optional[list[str]] = None, show_progress=True
+    ) -> list:
         """Compute fingerprints for the given SMILES list.
 
         Args:
+            smiles: List of SMILES strings to compute fingerprints for. If None, the
+                SMILES list provided at initialization will be used. Defaults to None.
             show_progress: Whether to show a progress bar. Defaults to True.
 
         Returns:
             list: list of computed fingerprints."""
         logger.info("Computing fingerprints...")
-        smiles_list = (
-            tqdm(self.smiles_list, total=len(self.smiles_list))
-            if show_progress
-            else self.smiles_list
+        if smiles is None:
+            smiles_list = self.smiles_list
+        applier = ParallelApplier(
+            func=self.fp_func,
+            iterable=smiles_list,
+            n_jobs=self.njobs,
+            show_progress=show_progress,
         )
-        fingerprints = Parallel(n_jobs=self.njobs)(
-            delayed(self.fp_func)(smi) for smi in smiles_list
-        )
+        fingerprints = applier()
         return [fp for fp in fingerprints if fp is not None]
 
     @staticmethod
@@ -116,7 +118,7 @@ class ButinaClustering:
         Returns:
             np.ndarray: array of cluster ids for each molecule.
         """
-        self.mol_clusters = self.taylor_butina_clustering(
+        self.mol_clusters = self._taylor_butina_clustering(
             self.fingerprints, dist_th=dist_th
         )
         cluster_id_list = np.zeros(len(self.fingerprints), dtype=int)
@@ -124,13 +126,43 @@ class ButinaClustering:
             cluster_id_list[list(cluster)] = cluster_num
         return cluster_id_list
 
-    def taylor_butina_clustering(
+    def compute_similarity_matrix(self, fps: Optional[list] = None) -> tuple[tuple]:
+        """Applies the butina clustering algorithm to a list of fingerprints.
+
+        Args:
+            fps: fingerprints of compounds to be clustered with the Butina algorith. If
+                None, the fingerprints calculated upon initialization will be used. Defaults to None.
+
+        Returns:
+            A tuple of tuples containing the indices of the compounds in each cluster.
+        """
+
+        if fps is None:
+            fps = self.fingerprints
+        similarities = []
+        size = len(fps)
+        simi_matrix = np.eye(size, dtype=self.np_dtypes)
+        # calculate the builk tanimoto similarities
+        for i in range(0, size):
+            sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[i + 1 :])
+            similarities.extend(sims)
+        similarities = np.array(similarities).flatten()
+        # populate the similarity matrix
+        r, c = np.triu_indices(size, 1)  # row, column indices, respectively
+        simi_matrix[r, c] = similarities
+        # add values for the lower triangle
+        simi_matrix += simi_matrix.T - np.eye(size, dtype=self.np_dtypes)
+        self.similarity_matrix = simi_matrix
+        return simi_matrix
+
+    def _taylor_butina_clustering(
         self, fps: list, dist_th: float = 0.35
     ) -> tuple[tuple]:
         """Applies the butina clustering algorithm to a list of fingerprints.
 
         Args:
-            fps: fingerprints of compounds to be clustered with the Butina algorith.
+            fps: fingerprints of compounds to be clustered with the Butina algorith. If
+                None, the fingerprints calculated upon initialization will be used. Defaults to None.
             dist_th: distance threshold. when close to 0, only very similar molecules are considered
                 neighbors and clustered together. When closer to 1, even dissimilar molecules will
                 be considered neighbors and grouped together. Defaults to 0.35.
@@ -138,28 +170,23 @@ class ButinaClustering:
         Returns:
             A tuple of tuples containing the indices of the compounds in each cluster.
         """
+        if fps is None:
+            fps = self.fingerprints
+        if self.similarity_matrix is not None:
+            size = self.similarity_matrix.shape[0]
+        else:
+            self.compute_similarity_matrix(fps)
+            size = len(fps)
 
-        similarities = []
-        nfps = len(fps)
-        simi_matrix = np.eye(nfps, dtype=self.np_dtypes)
-        # calculate the builk tanimoto similarities
-        for i in range(0, nfps):
-            sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[i + 1 :])
-            similarities.extend(sims)
-        similarities = np.array(similarities).flatten()
-        # populate the similarity matrix
-        r, c = np.triu_indices(nfps, 1)  # row, column indices, respectively
-        simi_matrix[r, c] = similarities
-        # add values for the lower triangle
-        simi_matrix += simi_matrix.T - np.eye(nfps, dtype=self.np_dtypes)
+        similarities = self.similarity_matrix[np.triu_indices(size, 1)].flatten()
+
         mol_clusters = Butina.ClusterData(  # now we cluster the data
             1 - similarities,  # convert to distance
-            nfps,
+            size,
             dist_th,
             isDistData=True,
             distFunc=TanimotoDist,
         )
-        self.similarity_matrix = simi_matrix
         return mol_clusters
 
 
