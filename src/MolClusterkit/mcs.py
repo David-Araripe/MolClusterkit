@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Module containing the MCS clustering class."""
 from itertools import combinations
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 import numpy as np
 from numpy.typing import DTypeLike
@@ -111,14 +111,54 @@ class MCSClustering(BaseClusterer):
                     f"Supported configurations are: {list(MCS_COMPARE_CONFIGS.keys())}"
                 )
 
-    def find_mcs_in_many(self, smiles: list[str]):
-        """Find the MCS in many molecules."""
+    def mcs_in_many(self, smiles: list[str]):
+        """Find the MCS in two or more molecules, given their SMILES.
+
+        Args:
+            smiles: list of SMILES strings.
+
+        Returns:
+            mcs_result: the MCS result object."""
+
         mols = [Chem.MolFromSmiles(smi) for smi in smiles]
         return rdFMCS.FindMCS(mols, timeout=self.timeout, **self.mcs_kwargs)
 
-    def _mcs_similarity(self, smipair: Tuple[str, str]):
-        """Compute the MCS similarity between two molecules given their SMILES and
-        return the fraction of matched atoms to the smaller molecule."""
+    def mcs_similarity(
+        self,
+        smipair: Tuple[str, str],
+        similarity_metric: Literal["johnson", "smaller/mces"] = "johnson",
+    ):
+        """Compute MCES between two molecules given their SMILES, returning the SMARTS
+        pattern and a score. Two metrics are available to calculate the similarity between
+        the two molecules, with values ranging from 0 to 1:
+
+        1. Johnson metric (default):
+        The similarity is calculated as the sum of the number of atoms
+        and bonds in the MCES divided by the sum of the number of atoms and bonds in
+        the two molecules.
+
+        .. math::
+        sim = \\frac{(E(MCES) + V(MCES))^2}{(E(Mol1) + V(Mol1)) * (E(Mol2) + V(Mol2))}
+
+        2. Smaller/MCES metric:
+        The similarity is calculated as number of atoms in the
+        largest fragment of the MCES divided by the number of atoms in the smaller
+        molecule.
+
+        .. math::
+        sim = \\frac{E(LargestFragment(MCES))}{min(E(Mol1), E(Mol2))}
+
+        Args:
+            smipair: tuple of two SMILES strings.
+
+        Raises:
+            ValueError: if the SMILES cannot be parsed into molecules.
+
+        Returns:
+            smarts_string: the SMARTS pattern of the MCS.
+            similarity: the fraction of matched atoms to the smaller molecule.
+        """
+
         mols = [Chem.MolFromSmiles(smi) for smi in smipair]
         if any([mols[0] is None, mols[1] is None]):
             logger.error(
@@ -126,13 +166,18 @@ class MCSClustering(BaseClusterer):
             )
             raise ValueError("Could not parse SMILES into molecules.")
         mcs_result = rdFMCS.FindMCS(list(mols), timeout=self.timeout, **self.mcs_kwargs)
-        min_atoms = min(mols[0].GetNumAtoms(), mols[1].GetNumAtoms())
-        return mcs_result.smartsString, mcs_result.numAtoms / min_atoms
-
-    def pairwise_mcs_similarity(self, smipair) -> Tuple[list[str], list[float]]:
-        """Helper function to compute similarity of molecule pair i and j."""
-        smarts_string, similarity = self._mcs_similarity(smipair=smipair)
-        return smarts_string, similarity
+        if similarity_metric == "johnson":
+            mcs_atoms, mcs_bonds = mcs_result.numAtoms, mcs_result.numBonds
+            mol1_atoms, mol1_bonds = mols[0].GetNumAtoms(), mols[0].GetNumBonds()
+            mol2_atoms, mol2_bonds = mols[1].GetNumAtoms(), mols[1].GetNumBonds()
+            simi_metric = (mcs_atoms + mcs_bonds) ** 2 / (
+                (mol1_atoms + mol1_bonds) * (mol2_atoms + mol2_bonds)
+            )
+        elif similarity_metric == "smaller/mces":
+            simi_metric = mcs_result.numAtoms / min(
+                mols[0].GetNumAtoms(), mols[1].GetNumAtoms()
+            )
+        return mcs_result.smartsString, simi_metric
 
     def compute_similarity_matrix(
         self,
@@ -157,7 +202,7 @@ class MCSClustering(BaseClusterer):
         # compute the similarity for all pairs of molecules and unpack results
         pairs = list(combinations(self.smiles_list, 2))
         applier = ParallelApplier(
-            func=self.pairwise_mcs_similarity,
+            func=self.mcs_similarity,
             iterable=pairs,
             n_jobs=self.njobs,
             show_progress=show_progress,
