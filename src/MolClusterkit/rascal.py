@@ -1,13 +1,16 @@
+"""Module containing the Rascal MCES clustering class. The class supports the calculation
+of a similarity matrix based on the MCES result, or clustering directly through fuzzy or
+Butina-based clustering methods.
+"""
+
 from collections import defaultdict
-from ctypes import Union
 from itertools import combinations
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 import numpy as np
 from numpy.typing import DTypeLike
 from rdkit import Chem
 from rdkit.Chem import rdRascalMCES
-from tqdm import tqdm
 
 from MolClusterkit.base_clusterer import BaseClusterer
 
@@ -17,7 +20,7 @@ from .parallel import ParallelApplier
 
 class RascalMCES(BaseClusterer):
     """A class for clustering molecules based on Rascal Maximum Common Edge Subgraph (MCES).
-    For the technical details, see; https://eprints.whiterose.ac.uk/3568/1/willets3.pdf
+    For the technical details, see: https://eprints.whiterose.ac.uk/3568/1/willets3.pdf
 
     Attributes:
         smiles_list: list of input SMILES strings representing the molecules to cluster.
@@ -35,26 +38,62 @@ class RascalMCES(BaseClusterer):
         self,
         smiles_list: Optional[list[str]] = None,
         np_dtypes: DTypeLike = np.float32,
-        similarity_threshold: float = 0.7,
-        all_best_mces: bool = True,
-        single_largest_frag: bool = True,
+        similarityThreshold: float = 0.7,
+        allBestMCESs: bool = True,
+        singleLargestFrag: bool = True,
         njobs: int = 8,
     ):
-        """Initialize the Rascal MCES clustering class.
+        """Initialize the Rascal MCES clustering class with a list of SMILES and a defined
+        numpy data type for the similarity matrix. Further, three options are available to
+        control the MCES algorithm:
+        - allBestMCESs: If True, reports all MCESs found of the same maximum size
+
 
         Args:
             smiles_list: List of SMILES strings to analyze
             np_dtypes: numpy data type for the similarity matrix
-            similarity_threshold: Threshold for similarity comparison (0.0 to 1.0)
-            all_best_mces: Whether to find all best MCES solutions
-            single_largest_frag: Whether to return only the single largest fragment
+            similarityThreshold: Threshold below which MCES won't be run. Between 0.0
+                and 1.0, default=0.7.
+            allBestMCESs: If True, reports all MCESs found of the same maximum size
+                Default False means just report the first found.
+            singleLargestFrag: Return the just single largest fragment of the MCES. This
+                is equivalent to running with allBestMCEs=True, finding the result with the
+                largest largestFragmentSize, and calling its largestFragmentOnly method.
         """
         super().__init__(smiles_list=smiles_list, njobs=njobs, np_dtypes=np_dtypes)
         # Set up Rascal options
-        self.similarityThreshold = similarity_threshold
-        self.allBestMCESs = all_best_mces
-        self.singleLargestFrag = single_largest_frag
-        self.returnEmptyMCES = False
+        self.opts_dict = {
+            "similarityThreshold": similarityThreshold,
+            "allBestMCESs": allBestMCESs,
+            "singleLargestFrag": singleLargestFrag,
+            "returnEmptyMCES": False,
+        }
+
+    def _mol_from_smiles(self, smiles: str) -> Chem.Mol:
+        """Converts a SMILES string to an RDKit molecule object.
+
+        Args:
+            smiles: SMILES to be converted to RDKit Mol object.
+
+        Returns:
+            RDKit Mol object.
+        """
+        return Chem.MolFromSmiles(smiles)
+
+    def _mols_from_smiles(self, smiles: list[str]) -> list[Chem.Mol]:
+        """Converts a list of SMILES strings to RDKit molecule objects using joblib
+        parallel processing.
+
+        Args:
+            smiles: list of SMILES to be converted to RDKit Mol objects.
+
+        Returns:
+            list of RDKit Mol objects.
+        """
+        applier = ParallelApplier(
+            func=self._mol_from_smiles, iterable=smiles, n_jobs=self.njobs
+        )
+        return applier()
 
     def _make_opts(
         self,
@@ -72,7 +111,8 @@ class RascalMCES(BaseClusterer):
         singleLargestFrag: Optional[bool] = None,
         timeout: Optional[int] = None,
     ):
-        """_summary_
+        """Create an RascalOptions object with the given settings. Passing parameters other
+        than the default `None` will override the settings set on object initialization.
 
         Args:
             allBestMCESs: If True, reports all MCESs found of the same maximum size
@@ -113,7 +153,7 @@ class RascalMCES(BaseClusterer):
         if allBestMCESs is not None:
             opts.allBestMCESs = allBestMCESs
         else:
-            opts.allBestMCESs = self.allBestMCESs
+            opts.allBestMCESs = self.opts_dict["allBestMCESs"]
 
         if completeAromaticRings is not None:
             opts.completeAromaticRings = completeAromaticRings
@@ -133,34 +173,59 @@ class RascalMCES(BaseClusterer):
         if returnEmptyMCES is not None:
             opts.returnEmptyMCES = returnEmptyMCES
         else:
-            opts.returnEmptyMCES = self.returnEmptyMCES
+            opts.returnEmptyMCES = self.opts_dict["returnEmptyMCES"]
 
         if ringMatchesRingOnly is not None:
             opts.ringMatchesRingOnly = ringMatchesRingOnly
         if similarityThreshold is not None:
             opts.similarityThreshold = similarityThreshold
         else:
-            opts.similarityThreshold = self.similarityThreshold
+            opts.similarityThreshold = self.opts_dict["similarityThreshold"]
 
         if singleLargestFrag is not None:
             opts.singleLargestFrag = singleLargestFrag
         else:
-            opts.singleLargestFrag = self.singleLargestFrag
+            opts.singleLargestFrag = self.opts_dict["singleLargestFrag"]
 
         if timeout is not None:
             opts.timeout = timeout
         return opts
 
-    def _mces_similarity(self, smipair: Tuple[str, str], **kwargs) -> Tuple[str, float]:
-        """Compute MCES similarity between two molecules given their SMILES.
+    def mces_similarity(
+        self,
+        smipair: Tuple[str, str],
+        similarity_metric: Literal["johnson", "smaller/mces"] = "johnson",
+        **kwargs,
+    ) -> Tuple[str, float]:
+        """Compute MCES between two molecules given their SMILES, returning the SMARTS
+        pattern and a score. Two metrics are available to calculate the similarity between
+        the two molecules, with values ranging from 0 to 1:
+
+        1. Johnson metric:
+        The similarity is calculated as the sum of the number of atoms
+        and bonds in the MCES divided by the sum of the number of atoms and bonds in
+        the two molecules.
+
+        .. math::
+        sim = \\frac{(E(MCES) + V(MCES))^2}{(E(Mol1) + V(Mol1)) * (E(Mol2) + V(Mol2))}
+
+        2. Smaller/MCES metric:
+        The similarity is calculated as number of atoms in the
+        largest fragment of the MCES divided by the number of atoms in the smaller
+        molecule.
+
+        .. math::
+        sim = \\frac{E(LargestFragment(MCES))}{min(E(Mol1), E(Mol2))}
 
         Args:
             smipair: Tuple of two SMILES strings
+            similarity_metric: The similarity metric to use. Options are 'johnson' or
+                'smaller/mces'. Default is 'johnson'.
             kwargs: keyword arguments for the MCES algorithm, used to create the settings
                 object through `self._make_opts`.
 
         Returns:
-            Tuple containing the SMARTS pattern and similarity score
+            Tuple containing the SMARTS pattern and a similarity score between 0 and 1.
         """
         mols = [Chem.MolFromSmiles(smi) for smi in smipair]
         min_atoms = min(mols[0].GetNumAtoms(), mols[1].GetNumAtoms())
@@ -171,24 +236,20 @@ class RascalMCES(BaseClusterer):
             )
             raise ValueError("Could not parse SMILES into molecules.")
 
-        params = {
-            "similarityThreshold": self.similarityThreshold,
-            "allBestMCESs": self.allBestMCESs,
-            "singleLargestFrag": self.singleLargestFrag,
-            "returnEmptyMCES": self.returnEmptyMCES,
-            **kwargs,
-        }
+        params = {**self.opts_dict, **kwargs}  # kwargs will override defaults
         opts = self._make_opts(**params)
         results = rdRascalMCES.FindMCES(mols[0], mols[1], opts)
         if not results:
             return "", 0.0
 
-        return results[0].smartsString, results[0].largestFragmentSize / min_atoms
-
-    def mces_similarity(self, smipair: Tuple[str, str]) -> Tuple[str, float]:
-        """Helper function to compute the mces similarity of molecule pair i and j."""
-        smarts, similarity = self._mces_similarity(smipair=smipair)
-        return smarts, similarity
+        if similarity_metric == "johnson":  # Johnson metric returns -1 if no MCES found
+            simi_metric = max([r.tier2Sim if r.tier2Sim != -1 else 0 for r in results])
+            # RASCAL is fast because it calculates two similarity metrics, the first
+            # being cheaper to calculate. The second is only calculated if the first
+            # is above the set threshold. Here we only return the second, under tier2Sim
+        elif similarity_metric == "smaller/mces":
+            simi_metric = results[0].largestFragmentSize / min_atoms
+        return results[0].smartsString, simi_metric
 
     def compute_similarity_matrix(
         self,
@@ -204,9 +265,7 @@ class RascalMCES(BaseClusterer):
             n_jobs: Number of parallel jobs to run
 
         Returns:
-            Tuple containing:
-                - Matrix of SMARTS patterns
-                - Similarity matrix
+            Tuple of the SMARTS matrix and the similarity matrix
         """
         if smiles_list is not None:
             self.smiles_list = smiles_list
@@ -247,20 +306,32 @@ class RascalMCES(BaseClusterer):
         self.smarts_matrix = smarts_matrix
         return smarts_matrix, simi_matrix
 
-    def cluster_butina(
+    def fuzzy_mces_clustering(
         self,
         smiles_list: Optional[list[str]] = None,
         cutoff: float = 0.7,
-        min_intra_cluster_sim: Optional[float] = None,
-        clusterMergeSim: Optional[float] = None,
+        clusterMergeSim: float = 0.6,
+        maxNumFrags: int = 2,
+        minFragSize: int = 3,
+        minIntraClusterSim: int = 0.9,
     ) -> list[list[int]]:
-        """Perform Butina clustering on molecules.
+        """Perform fuzzy clustering based on RASCAL MCES similarity, where a single molecule
+        can belong to multiple clusters. To quickly check for cluster membership, use the
+        method `get_cluster_membership` to return a membershipo dictionary.
 
         Args:
             cutoff: Similarity cutoff for clustering
             smiles_list: Optional list of SMILES to override instance list
             clusterMergeSim: Two clusters are merged if the fraction of molecules they
                 have in common is greater than this. Default=0.6.
+            maxNumFrags: The maximum number of fragments allowed in the MCES for each
+                pair of molecules. Default=2. So that the MCES isn't a lot of small
+                fragments scattered around the molecules giving an inflated estimate
+                of similarity.
+            minFragSize: The minimum number of atoms in a fragment for it to be included
+                in the MCES. Default=3.
+            minIntraClusterSim: Two pairs of molecules are included in the same cluster
+                if the similarity between their MCESs is greater than this. Default=0.9.
 
         Returns:
             List of clusters, where each cluster is a list of molecule indices
@@ -272,26 +343,40 @@ class RascalMCES(BaseClusterer):
             logger.warning("Similarity matrix not computed. Computing now...")
             self.compute_similarity_matrix()
 
-        mols = [Chem.MolFromSmiles(smi) for smi in self.smiles_list]
+        mols = self._mols_from_smiles(self.smiles_list)
         cluster_opts = rdRascalMCES.RascalClusterOptions()
         cluster_opts.similarityCutoff = cutoff
         cluster_opts.numThreads = self.njobs
-        # cluster_opts.clusterMergeSim
-        # cluster_opts.maxNumFrags
-        # cluster_opts.minFragSize
-        # cluster_opts.minIntraClusterSim
-        if min_intra_cluster_sim is not None:
-            cluster_opts.minIntraClusterSim = 0.0
-        return rdRascalMCES.RascalButinaCluster(mols, cluster_opts)
+        cluster_opts.clusterMergeSim = clusterMergeSim
+        cluster_opts.maxNumFrags = maxNumFrags
+        cluster_opts.minFragSize = minFragSize
+        cluster_opts.minIntraClusterSim = minIntraClusterSim
+        return rdRascalMCES.RascalCluster(mols, cluster_opts)
 
-    def cluster_fuzzy(
+    def butina_mces_clustering(
         self,
         smiles_list: Optional[list[str]] = None,
+        cutoff: float = 0.7,
+        clusterMergeSim: float = 0.6,
+        maxNumFrags: int = 2,
+        minFragSize: int = 3,
+        minIntraClusterSim: int = 0.9,
     ) -> list[list[int]]:
-        """Perform fuzzy clustering on molecules.
+        """Performs clustering based on the Johnson similarity between molecules and
+        their MCES, but using the Butina method (non-fuzzy) to assign molecules to clusters.
 
         Args:
             smiles_list: Optional list of SMILES to override instance list
+            clusterMergeSim: Two clusters are merged if the fraction of molecules they
+                have in common is greater than this. Default=0.6.
+            maxNumFrags: The maximum number of fragments allowed in the MCES for each
+                pair of molecules. Default=2. So that the MCES isn't a lot of small
+                fragments scattered around the molecules giving an inflated estimate
+                of similarity.
+            minFragSize: The minimum number of atoms in a fragment for it to be included
+                in the MCES. Default=3.
+            minIntraClusterSim: Two pairs of molecules are included in the same cluster
+                if the similarity between their MCESs is greater than this. Default=0.9.
 
         Returns:
             List of clusters, where each cluster is a list of molecule indices
@@ -299,12 +384,16 @@ class RascalMCES(BaseClusterer):
         if smiles_list is not None:
             self.smiles_list = smiles_list
 
-        if self.similarity_matrix is None:
-            logger.warning("Similarity matrix not computed. Computing now...")
-            self.compute_similarity_matrix()
+        cluster_opts = rdRascalMCES.RascalClusterOptions()
+        cluster_opts.similarityCutoff = cutoff
+        cluster_opts.numThreads = self.njobs
+        cluster_opts.clusterMergeSim = clusterMergeSim
+        cluster_opts.maxNumFrags = maxNumFrags
+        cluster_opts.minFragSize = minFragSize
+        cluster_opts.minIntraClusterSim = minIntraClusterSim
 
-        mols = [Chem.MolFromSmiles(smi) for smi in self.smiles_list]
-        return rdRascalMCES.RascalCluster(mols)
+        mols = self._mols_from_smiles(self.smiles_list)
+        return rdRascalMCES.RascalCluster(mols, cluster_opts)
 
     def get_cluster_membership(self, clusters: list[list[int]]) -> defaultdict:
         """Get membership dictionary showing which clusters each molecule belongs to.
