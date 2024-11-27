@@ -393,7 +393,7 @@ class RascalMCES(BaseClusterer):
         cluster_opts.minIntraClusterSim = minIntraClusterSim
 
         mols = self._mols_from_smiles(self.smiles_list)
-        return rdRascalMCES.RascalCluster(mols, cluster_opts)
+        return rdRascalMCES.RascalButinaCluster(mols, cluster_opts)
 
     def get_cluster_membership(self, clusters: list[list[int]]) -> defaultdict:
         """Get membership dictionary showing which clusters each molecule belongs to.
