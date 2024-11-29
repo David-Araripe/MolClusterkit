@@ -72,7 +72,7 @@ class ButinaClustering(BaseClusterer):
             self.fp_func = partial(self.smi2fp, **self.fp_kwargs)
 
     def calculate_fingerprints(
-        self, smiles: Optional[list[str]] = None, show_progress=True
+        self, smiles_list: Optional[list[str]] = None, show_progress=True
     ) -> list:
         """Compute fingerprints for the given SMILES list.
 
@@ -84,7 +84,7 @@ class ButinaClustering(BaseClusterer):
         Returns:
             list: list of computed fingerprints."""
         logger.info("Computing fingerprints...")
-        if smiles is None:
+        if smiles_list is None:
             smiles_list = self.smiles_list
         applier = ParallelApplier(
             func=self.fp_func,
