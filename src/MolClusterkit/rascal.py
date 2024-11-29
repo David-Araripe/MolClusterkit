@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Module containing the Rascal MCES clustering class. The class supports the calculation
 of a similarity matrix based on the MCES result, or clustering directly through fuzzy or
 Butina-based clustering methods.
@@ -256,6 +257,7 @@ class RascalMCES(BaseClusterer):
         smiles_list: Optional[list[str]] = None,
         show_progress: bool = True,
         n_jobs: int = 8,
+        **kwargs,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Compute the similarity matrix based on MCES for all molecules.
 
@@ -263,6 +265,8 @@ class RascalMCES(BaseClusterer):
             smiles_list: Optional list of SMILES to override instance list
             show_progress: Whether to show progress bar
             n_jobs: Number of parallel jobs to run
+            kwargs: Additional keyword arguments to be passed to the `_make_opts` method,
+                which will create the configuration object for the MCES algorithm.
 
         Returns:
             Tuple of the SMARTS matrix and the similarity matrix
@@ -282,7 +286,7 @@ class RascalMCES(BaseClusterer):
             n_jobs=n_jobs,
             show_progress=show_progress,
         )
-        results = applier()
+        results = applier(**kwargs)
 
         # Unpack results
         smarts_strings, similarities = zip(*results)
