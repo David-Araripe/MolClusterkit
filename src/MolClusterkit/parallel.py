@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Module for parallel processing of functions with joblib and tqdm for the progress bar"""
 
 import contextlib
@@ -123,6 +124,7 @@ class ParallelApplier:
         for i in range(0, self.total_items, self.chunk_size):
             chunk = self.iterable[i : i + self.chunk_size]
             chunks.append(chunk)
+        logger.debug(f"Chunk lengths: {[len(chunk) for chunk in chunks]}")
         self.n_chunks = len(chunks)
         return chunks
 
@@ -150,6 +152,15 @@ class ParallelApplier:
             list[Any]: list of results
         """
         chunks = self._make_chunks()
+        if kwargs:
+            logger.debug(f"Passing kwargs: {kwargs}")
+            if isinstance(self.func, partial):
+                raise ValueError(
+                    "If applying a partial function, initialize it with keyword arguments directly."
+                )
+            process_chunk = partial(self._process_chunk, **kwargs)
+        else:
+            process_chunk = self._process_chunk
 
         with tqdm_joblib(
             tqdm(
@@ -161,7 +172,7 @@ class ParallelApplier:
             )
         ) as progress_bar:  # noqa: F841
             results = Parallel(n_jobs=self.n_jobs, backend=self.backend)(
-                delayed(self._process_chunk)(chunk, **kwargs) for chunk in chunks
+                delayed(process_chunk)(chunk) for chunk in chunks
             )
 
         return [item for chunk_result in results for item in chunk_result]
