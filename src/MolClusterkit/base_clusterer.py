@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+"""Base clusterer class for the different clustering methods implemented in the package."""
 from itertools import combinations
 from typing import Optional
 
@@ -11,6 +13,10 @@ from sklearn.cluster import DBSCAN, SpectralClustering
 from .logger import logger
 
 
+# Inheritance structure in the package:
+# BaseClusterer -> RascalMCES
+# BaseClusterer -> MCSClustering
+# BaseClusterer -> ButinaClustering
 class BaseClusterer:
     """
     A base class for the different clustering methods implemented in the package. It
