@@ -9,6 +9,7 @@ from networkx.algorithms import community
 from numpy.typing import DTypeLike
 from scipy.cluster.hierarchy import fcluster, linkage
 from sklearn.cluster import DBSCAN, SpectralClustering
+from sklearn.metrics import silhouette_score
 
 from .logger import logger
 
@@ -69,10 +70,10 @@ class BaseClusterer:
 
         Args:
             t: number of clusters or the threshold to cut the hierarchy.
-            method: linkage algorithm to use. Options include 'single', 'complete',
-                'average', 'ward'. Defaults to "ward".
-            criterion: criterion to form flat clusters. Common choices are 'maxclust'
-                and 'distance'. Defaults to "maxclust".
+            method: linkage algorithm to use. Options include "single", "complete",
+                "average", "ward". Defaults to "ward".
+            criterion: criterion to form flat clusters. Common choices are "maxclust"
+                and "distance". Defaults to "maxclust".
 
         Returns:
             labels: list of cluster labels.
@@ -82,6 +83,36 @@ class BaseClusterer:
         labels = fcluster(Z, t, criterion=criterion, **kwargs)
         self.mol_clusters = labels
         return labels - 1  # Adjusting the labels to be 0-based
+
+    def hierarchical_silhouette_clustering(
+        self, max_clusters=20, method="ward", criterion="maxclust", **kwargs
+    ):
+        """Hierarchical clustering based on the similarity matrix using silhouette score.
+        This method will compute the silhouette score for 2 to `max_clusters` clusters and
+        return the labels with the cluster number that maximizes the silhouette score.
+
+        Args:
+            max_clusters: maximum number of clusters to consider.
+            method: linkage algorithm to use. Options include "single", "complete",
+                "average", "ward". Defaults to "ward".
+            criterion: criterion to form flat clusters. Common choices are "maxclust"
+                and "distance". Defaults to "maxclust".
+
+        Returns:
+            labels: list of cluster labels.
+        """
+        distance_matrix = 1 - self.similarity_matrix
+        scores = []
+        all_labels = []
+        for t in range(2, max_clusters + 1):
+            Z = linkage(distance_matrix, method=method)
+            labels = fcluster(Z, t, criterion=criterion, **kwargs)
+            scores.append(silhouette_score(distance_matrix, labels))
+            all_labels.append(labels)
+        best_labels = all_labels[np.argmax(scores)]
+        logger.info(f"Best number of clusters: {len(np.unique(best_labels))}")
+        logger.info(f"Silhouette scores: {scores}")
+        return best_labels
 
     def graph_based_clustering(self, threshold: float = 0.7, **kwargs) -> list:
         """Graph-based clustering based on the similarity matrix using community detection.
