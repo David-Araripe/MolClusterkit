@@ -102,10 +102,10 @@ class BaseClusterer:
             labels: list of cluster labels.
         """
         distance_matrix = 1 - self.similarity_matrix
+        Z = linkage(distance_matrix, method=method)
         scores = []
         all_labels = []
         for t in range(2, max_clusters + 1):
-            Z = linkage(distance_matrix, method=method)
             labels = fcluster(Z, t, criterion=criterion, **kwargs)
             scores.append(silhouette_score(distance_matrix, labels))
             all_labels.append(labels)
@@ -124,6 +124,11 @@ class BaseClusterer:
         Returns:
             labels: list of cluster labels.
         """
+        if self.smiles_list is None:
+            raise ValueError(
+                "No SMILES list provided. Pass smiles_list to the constructor "
+                "or to compute_similarity_matrix()."
+            )
         G = nx.Graph()
         iter_arr = list(combinations(range(len(self.smiles_list)), 2))
 

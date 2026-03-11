@@ -72,7 +72,7 @@ class MCSClustering(BaseClusterer):
 
         Args:
             smiles_list: a list of smiles.
-            timeout: a timeout for the MCS computation in seconds. Defaults to 1.5.
+            timeout: a timeout for the MCS computation in seconds. Defaults to 15.
             np_dtypes: numpy data type for the similarity matrix or arrays.
                 Defaults to np.float32.
             mcs_kwargs: keyword arguments for the MCS algorithm. Will be parsed based
@@ -197,6 +197,11 @@ class MCSClustering(BaseClusterer):
         # create the similarity matrix with 1s in the diagonal
         if smiles_list is not None:
             self.smiles_list = smiles_list
+        if self.smiles_list is None:
+            raise ValueError(
+                "No SMILES list provided. Pass smiles_list to the constructor "
+                "or to compute_similarity_matrix()."
+            )
         n_mols = len(self.smiles_list)
         simi_matrix = np.eye(n_mols, dtype=self.np_dtypes)
         # compute the similarity for all pairs of molecules and unpack results

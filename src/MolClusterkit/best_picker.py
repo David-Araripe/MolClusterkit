@@ -103,8 +103,10 @@ def mcs_based_clustering(
         mcs_kwargs = {}
     if any([isinstance(data, list), isinstance(data, np.ndarray)]):
         smiles_list = data
-        mcs_cluster = MCSClustering(smiles_list, timeout=timeout, **mcs_kwargs)
-        mcs_cluster.compute_similarity_matrix(n_jobs=n_jobs)
+        mcs_cluster = MCSClustering(
+            smiles_list, timeout=timeout, njobs=n_jobs, **mcs_kwargs
+        )
+        mcs_cluster.compute_similarity_matrix()
         cluster_ids = mcs_cluster.cluster_molecules(algorithm=algorithm, **kwargs)
         data = pd.DataFrame(
             {"smiles": smiles_list, "cluster_id": cluster_ids}, index=None
@@ -119,9 +121,11 @@ def mcs_based_clustering(
                     f"No compounds with a score above {score_cutoff} were found."
                 )
         smiles_list = data[smiles_col].tolist()
-        mcs_cluster = MCSClustering(smiles_list, timeout=timeout, **mcs_kwargs)
-        mcs_cluster.compute_similarity_matrix(n_jobs=n_jobs)
-        labels = mcs_cluster.cluster_molecules(algorithm=algorithm.lower(), **kwargs)
+        mcs_cluster = MCSClustering(
+            smiles_list, timeout=timeout, njobs=n_jobs, **mcs_kwargs
+        )
+        mcs_cluster.compute_similarity_matrix()
+        labels = mcs_cluster.cluster_molecules(algorithm=algorithm, **kwargs)
         data = data.assign(cluster_id=labels)
         if all([pick_best, score_col is not None]):
             data = data.groupby("cluster_id").apply(

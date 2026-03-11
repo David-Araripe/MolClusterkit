@@ -229,13 +229,13 @@ class RascalMCES(BaseClusterer):
             Tuple containing the SMARTS pattern and a similarity score between 0 and 1.
         """
         mols = [Chem.MolFromSmiles(smi) for smi in smipair]
-        min_atoms = min(mols[0].GetNumAtoms(), mols[1].GetNumAtoms())
         if any(mol is None for mol in mols):
             logger.error(
                 f"Could not parse: {smipair[0]} or {smipair[1]}!!\n"
                 "Remove invalid SMILES..."
             )
             raise ValueError("Could not parse SMILES into molecules.")
+        min_atoms = min(mols[0].GetNumAtoms(), mols[1].GetNumAtoms())
 
         params = {**self.opts_dict, **kwargs}  # kwargs will override defaults
         opts = self._make_opts(**params)
@@ -273,7 +273,11 @@ class RascalMCES(BaseClusterer):
         """
         if smiles_list is not None:
             self.smiles_list = smiles_list
-
+        if self.smiles_list is None:
+            raise ValueError(
+                "No SMILES list provided. Pass smiles_list to the constructor "
+                "or to compute_similarity_matrix()."
+            )
         n_mols = len(self.smiles_list)
         simi_matrix = np.eye(n_mols, dtype=self.np_dtypes)
 
@@ -317,7 +321,7 @@ class RascalMCES(BaseClusterer):
         clusterMergeSim: float = 0.6,
         maxNumFrags: int = 2,
         minFragSize: int = 3,
-        minIntraClusterSim: int = 0.9,
+        minIntraClusterSim: float = 0.9,
     ) -> list[list[int]]:
         """Perform fuzzy clustering based on RASCAL MCES similarity, where a single molecule
         can belong to multiple clusters. To quickly check for cluster membership, use the
@@ -364,7 +368,7 @@ class RascalMCES(BaseClusterer):
         clusterMergeSim: float = 0.6,
         maxNumFrags: int = 2,
         minFragSize: int = 3,
-        minIntraClusterSim: int = 0.9,
+        minIntraClusterSim: float = 0.9,
     ) -> list[list[int]]:
         """Performs clustering based on the Johnson similarity between molecules and
         their MCES, but using the Butina method (non-fuzzy) to assign molecules to clusters.

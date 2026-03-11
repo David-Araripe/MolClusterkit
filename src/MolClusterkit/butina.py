@@ -99,7 +99,7 @@ class ButinaClustering(BaseClusterer):
     def smi2fp(smi, radius: int = 2, nBits=2048, useChirality=True, **kwargs):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
-            print(f"Invalid SMILES detected: {smi}")
+            logger.warning(f"Invalid SMILES detected: {smi}")
             return None
         morgan_gen = rdFingerprintGenerator.GetMorganGenerator(
             radius=radius, fpSize=nBits, includeChirality=useChirality, **kwargs
