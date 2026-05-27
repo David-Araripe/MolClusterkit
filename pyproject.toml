@@ -46,9 +46,6 @@ dev = [
 butinacluster = "MolClusterkit.cli.butina_cluster:main"
 mcscluster = "MolClusterkit.cli.mcs_cluster:main"
 
-[tool.setuptools.dynamic]
-version = { attr = "MolClusterkit.__version__" }
-
 [tool.setuptools_scm]
 write_to = "src/MolClusterkit/_version.py"
 
