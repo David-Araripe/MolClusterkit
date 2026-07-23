@@ -27,7 +27,7 @@ class ButinaClustering(BaseClusterer):
     - fingerprints: Computed fingerprints for the input SMILES.
     - mol_clusters: A tuple of tuples with indexes within each cluster.
     - similarity_matrix: A similarity matrix for the input SMILES, computed
-        after applying calling the `cluster_molecules` or the `taylor_butina_clustering` methods.
+        after applying calling the `cluster_molecules` or the `compute_similarity_matrix` methods.
 
     Usage example:
     >>> smiles_list = [...]  # Your list of SMILES
@@ -62,8 +62,9 @@ class ButinaClustering(BaseClusterer):
         """
         super().__init__(smiles_list=smiles_list, njobs=njobs, np_dtypes=np_dtypes)
         self.fp_kwargs = {**fp_kwargs}
+        self._similarity_matrix_fps = None
         self._set_fp_func(fp_func)
-        self.fingerprints = self.calculate_fingerprints(**self.fp_kwargs)
+        self.fingerprints = self.calculate_fingerprints()
 
     def _set_fp_func(self, fp_func: Optional[Callable]):
         if fp_func is not None:
@@ -81,8 +82,11 @@ class ButinaClustering(BaseClusterer):
                 SMILES list provided at initialization will be used. Defaults to None.
             show_progress: Whether to show a progress bar. Defaults to True.
 
+        Raises:
+            ValueError: if any of the SMILES cannot be parsed into molecules.
+
         Returns:
-            list: list of computed fingerprints."""
+            list: list of computed fingerprints, one per input SMILES."""
         logger.info("Computing fingerprints...")
         if smiles_list is None:
             smiles_list = self.smiles_list
@@ -93,20 +97,51 @@ class ButinaClustering(BaseClusterer):
             show_progress=show_progress,
         )
         fingerprints = applier()
-        return [fp for fp in fingerprints if fp is not None]
+        invalid = [
+            (idx, smi)
+            for idx, (smi, fp) in enumerate(zip(smiles_list, fingerprints))
+            if fp is None
+        ]
+        if invalid:
+            details = ", ".join(f"{idx}: {smi}" for idx, smi in invalid)
+            logger.error(f"Could not parse: {details}!!\nRemove invalid SMILES...")
+            raise ValueError(
+                f"Could not parse SMILES into molecules at index: {details}"
+            )
+        return fingerprints
 
     @staticmethod
     def smi2fp(smi, radius: int = 2, nBits=2048, useChirality=True, **kwargs):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
-            logger.warning(f"Invalid SMILES detected: {smi}")
+            logger.error(f"Invalid SMILES detected: {smi}")
             return None
         morgan_gen = rdFingerprintGenerator.GetMorganGenerator(
             radius=radius, fpSize=nBits, includeChirality=useChirality, **kwargs
         )
         return morgan_gen.GetFingerprint(mol)
 
-    def cluster_molecules(self, dist_th: float = 0.35):
+    def cluster_molecules(self, algorithm: str = "Butina", **kwargs):
+        """Cluster the molecules with the chosen algorithm.
+
+        Args:
+            algorithm: algorithm to use for clustering. On top of the algorithms shared
+                by all clustering classes ('DBSCAN', 'Hierarchical', 'Spectral',
+                'GraphBased'), 'Butina' runs the Taylor-Butina algorithm on the
+                fingerprints. Defaults to "Butina".
+            kwargs: keyword arguments for the chosen algorithm, e.g. `dist_th` for
+                'Butina' or `n_clusters` for 'Spectral'.
+
+        Returns:
+            labels: cluster id for each molecule.
+        """
+        if algorithm == "Butina":
+            return self.butina_clustering(**kwargs)
+        if self.similarity_matrix is None:
+            self.compute_similarity_matrix()
+        return super().cluster_molecules(algorithm=algorithm, **kwargs)
+
+    def butina_clustering(self, dist_th: float = 0.35):
         """cluster the molecules based on the butina algorithm. Returns the clusters
         as a list of lists of indices.
 
@@ -153,6 +188,7 @@ class ButinaClustering(BaseClusterer):
         # add values for the lower triangle
         simi_matrix += simi_matrix.T - np.eye(size, dtype=self.np_dtypes)
         self.similarity_matrix = simi_matrix
+        self._similarity_matrix_fps = fps
         return simi_matrix
 
     def _taylor_butina_clustering(
@@ -172,11 +208,11 @@ class ButinaClustering(BaseClusterer):
         """
         if fps is None:
             fps = self.fingerprints
-        if self.similarity_matrix is not None:
-            size = self.similarity_matrix.shape[0]
-        else:
+        # only reuse the cached matrix if it was computed from these very fingerprints,
+        # otherwise it would mislabel the molecules being clustered here.
+        if self.similarity_matrix is None or fps is not self._similarity_matrix_fps:
             self.compute_similarity_matrix(fps)
-            size = len(fps)
+        size = len(fps)
 
         similarities = self.similarity_matrix[np.triu_indices(size, 1)].flatten()
 

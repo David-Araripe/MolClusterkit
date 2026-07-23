@@ -58,20 +58,27 @@ class ParallelApplier:
         self.func = self._set_func(func)
         self.iterable = list(iterable)  # Convert to list for length calculation
         self.show_progress = show_progress
-        self.n_jobs = n_jobs if n_jobs > 0 else None  # None means all cores in joblib
+        self.n_jobs = n_jobs
+        # joblib resolves -1 to all cores; we need the resolved count for chunk sizing
+        self.n_workers = joblib.effective_n_jobs(n_jobs)
         self.backend = self._set_backend(backend)
         self.total_items = len(self.iterable)
+
+        if self.total_items == 0:
+            raise ValueError(
+                f"No items to process: the iterable given to ParallelApplier for "
+                f"'{self.func_name}' is empty. If the items are pairs built with "
+                "itertools.combinations, at least two input elements are required."
+            )
+
         self.chunk_size = self._set_chunk_size(chunk_size)
         logger.debug(f"Chunk size: {self.chunk_size}")
 
-        if self.total_items == 0:
-            raise ValueError("Empty iterable provided.")
-
     def _set_chunk_size(self, chunk_size: int) -> int:
-        if self.total_items <= self.n_jobs:
+        if self.total_items <= self.n_workers:
             return 1
         elif chunk_size is None:
-            return ceil(self.total_items / self.n_jobs)
+            return ceil(self.total_items / self.n_workers)
         return chunk_size
 
     def _set_func(self, func):
@@ -162,15 +169,20 @@ class ParallelApplier:
         else:
             process_chunk = self._process_chunk
 
-        with tqdm_joblib(
-            tqdm(
-                total=self.n_chunks,
-                desc=f"Applying {self.func_name} to chunks",
-                unit="chunk",
-                position=0,
-                leave=True,
+        if self.show_progress:
+            progress = tqdm_joblib(
+                tqdm(
+                    total=self.n_chunks,
+                    desc=f"Applying {self.func_name} to chunks",
+                    unit="chunk",
+                    position=0,
+                    leave=True,
+                )
             )
-        ) as progress_bar:  # noqa: F841
+        else:
+            progress = contextlib.nullcontext()
+
+        with progress:
             results = Parallel(n_jobs=self.n_jobs, backend=self.backend)(
                 delayed(process_chunk)(chunk) for chunk in chunks
             )

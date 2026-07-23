@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Module containing the MCS clustering class."""
 from itertools import combinations
+from math import ceil
 from typing import Literal, Optional, Tuple
 
 import numpy as np
@@ -72,7 +73,9 @@ class MCSClustering(BaseClusterer):
 
         Args:
             smiles_list: a list of smiles.
-            timeout: a timeout for the MCS computation in seconds. Defaults to 15.
+            timeout: a timeout for the MCS computation in seconds. Must be positive;
+                fractional values are rounded up to whole seconds, since RDKit only
+                accepts an integer timeout. Defaults to 15.
             np_dtypes: numpy data type for the similarity matrix or arrays.
                 Defaults to np.float32.
             mcs_kwargs: keyword arguments for the MCS algorithm. Will be parsed based
@@ -85,17 +88,45 @@ class MCSClustering(BaseClusterer):
             >>> labels = mcs_cluster.cluster_molecules(algorithm='DBSCAN')
         """
         super().__init__(smiles_list=smiles_list, njobs=njobs, np_dtypes=np_dtypes)
-        self.timeout = timeout
+        self.timeout = self._set_timeout(timeout)
         self.mcs_kwargs = {}
         self._setup_mcs_configs(**mcs_kwargs)
         self._check_low_timeout()
+
+    def _set_timeout(self, timeout) -> int:
+        """Coerce the timeout to the whole number of seconds that RDKit expects.
+
+        `rdFMCS.FindMCS` only accepts an unsigned int, so floats are rounded up.
+        Rounding up (rather than to nearest) keeps a sub-second timeout from
+        becoming 0, which RDKit interprets as "no timeout at all".
+
+        Args:
+            timeout: requested timeout in seconds.
+
+        Raises:
+            TypeError: if the timeout is not a number.
+            ValueError: if the timeout is not strictly positive.
+
+        Returns:
+            int: the timeout in whole seconds.
+        """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError(
+                f"timeout must be a number of seconds, got {type(timeout).__name__}."
+            )
+        if timeout <= 0:
+            raise ValueError(
+                f"timeout must be a positive number of seconds, got {timeout}."
+            )
+        return ceil(timeout)
 
     def _check_low_timeout(self):
         """Check if the timeout is too low."""
         if self.timeout < 2:
             logger.warning(
-                "Timeout is too low. The MCS algorithm might not find the MCS for some pairs, "
-                "raising a not-so-clear error message. Consider increasing the timeout."
+                f"A timeout of {self.timeout}s is very low. The MCS search may be "
+                "cancelled before it reaches the true maximum common substructure, "
+                "which underestimates the similarity. Consider increasing the timeout."
             )
 
     def _setup_mcs_configs(self, **mcs_kwargs):
@@ -150,9 +181,12 @@ class MCSClustering(BaseClusterer):
 
         Args:
             smipair: tuple of two SMILES strings.
+            similarity_metric: the similarity metric to use. Options are 'johnson' or
+                'smaller/mces'. Defaults to 'johnson'.
 
         Raises:
-            ValueError: if the SMILES cannot be parsed into molecules.
+            ValueError: if the SMILES cannot be parsed into molecules, or if an
+                unsupported similarity_metric is given.
 
         Returns:
             smarts_string: the SMARTS pattern of the MCS.
@@ -177,31 +211,35 @@ class MCSClustering(BaseClusterer):
             simi_metric = mcs_result.numAtoms / min(
                 mols[0].GetNumAtoms(), mols[1].GetNumAtoms()
             )
+        else:
+            raise ValueError(
+                f"Unsupported similarity_metric: {similarity_metric!r}. "
+                "Valid options are 'johnson' and 'smaller/mces'."
+            )
         return mcs_result.smartsString, simi_metric
 
     def compute_similarity_matrix(
         self,
         smiles_list: Optional[list[str]] = None,
         show_progress=True,
+        similarity_metric: Literal["johnson", "smaller/mces"] = "johnson",
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Compute the similarity matrix based on MCS for all molecules.
+        """Compute the similarity matrix based on MCS for all molecules. Parallel
+        processing uses the `njobs` set on the instance.
 
         Args:
-            n_jobs: number of jobs for parallel processing. Defaults to 8.
+            smiles_list: optional list of SMILES overriding the one held by the
+                instance. Defaults to None.
             show_progress: whether to show the progress bar. Defaults to True.
+            similarity_metric: the similarity metric to use for every pair. Options are
+                'johnson' or 'smaller/mces'. Defaults to 'johnson'.
 
         Returns:
             smarts_matrix: np.ndarray with the smarts patterns of the MCS's.
             simi_matrix: np.ndarray with the similarity matrix.
         """
         # create the similarity matrix with 1s in the diagonal
-        if smiles_list is not None:
-            self.smiles_list = smiles_list
-        if self.smiles_list is None:
-            raise ValueError(
-                "No SMILES list provided. Pass smiles_list to the constructor "
-                "or to compute_similarity_matrix()."
-            )
+        self._resolve_smiles_list(smiles_list)
         n_mols = len(self.smiles_list)
         simi_matrix = np.eye(n_mols, dtype=self.np_dtypes)
         # compute the similarity for all pairs of molecules and unpack results
@@ -212,7 +250,7 @@ class MCSClustering(BaseClusterer):
             n_jobs=self.njobs,
             show_progress=show_progress,
         )
-        results = applier()
+        results = applier(similarity_metric=similarity_metric)
         smarts_strings, similarities = zip(*results)
         # take the indices of the upper triangle and populate the matrix
         r, c = np.triu_indices(n_mols, 1)  # row, column indices, respectively

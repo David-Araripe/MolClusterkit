@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Module containing the functions that are used for by the command line interface."""
+"""Module containing high-level functions that cluster a set of compounds and,
+optionally, pick the best scoring compound of each cluster."""
 from typing import Optional, Union
 
 import numpy as np
@@ -11,11 +12,56 @@ from .mcs import MCSClustering
 from .misc import find_smiles_column
 
 
+def _apply_score_cutoff(
+    data: pd.DataFrame, score_col: Optional[str], score_cutoff
+) -> pd.DataFrame:
+    """Keep only the rows whose score exceeds the cutoff.
+
+    The filter is applied only when both `score_col` and `score_cutoff` are given.
+
+    Args:
+        data: dataframe to filter.
+        score_col: column holding the scores, or None to skip filtering.
+        score_cutoff: keep rows where score_col > score_cutoff, or None to skip.
+
+    Raises:
+        ValueError: if the cutoff removes every row.
+
+    Returns:
+        pd.DataFrame: the filtered dataframe.
+    """
+    if score_col is not None and score_cutoff is not None:
+        data = data.query(f"{score_col} > {score_cutoff}")
+        if data.shape[0] == 0:
+            raise ValueError(
+                f"No compounds with a score above {score_cutoff} were found."
+            )
+    return data
+
+
+def _pick_best_per_cluster(
+    data: pd.DataFrame, score_col: Optional[str], pick_best: bool
+) -> pd.DataFrame:
+    """Reduce each cluster to its highest-scoring compound.
+
+    Args:
+        data: dataframe with a `cluster_id` column.
+        score_col: column holding the scores, or None.
+        pick_best: whether to reduce to the best per cluster.
+
+    Returns:
+        pd.DataFrame: one row per cluster when picking is requested, else `data`.
+    """
+    if pick_best and score_col is not None:
+        data = data.loc[data.groupby("cluster_id")[score_col].idxmax()]
+    return data
+
+
 def butina_based_clustering(
     data: Union[pd.DataFrame, list[str], np.ndarray],
     smiles_col: Optional[str],
     score_col: Optional[str] = None,
-    score_cutoff=7.0,
+    score_cutoff=None,
     dist_th=0.25,
     njobs=8,
     pick_best=False,
@@ -27,8 +73,9 @@ def butina_based_clustering(
         smiles_col: column name containing the smiles structures of the compounds.
             If is `None`, will try to find the smiles column based on a simple regex search.
         score_col: column name containing the scores. Optional. Defaults to None.
-        score_cutoff: threshold to be used on score_col; keep only above cutoff. Defaults to 7.0.
-        cutoff: cutoff for the butina clustering. Defaults to 0.25.
+        score_cutoff: threshold to be used on score_col; keep only above cutoff. Only
+            applied when score_col is also given. Defaults to None.
+        dist_th: tanimoto distance threshold for the butina clustering. Defaults to 0.25.
         njobs: number of jobs for parallelization. Defaults to 8.
         pick_best: whether to pick the best scoring compound from each cluster. Defaults to False.
 
@@ -46,20 +93,12 @@ def butina_based_clustering(
     elif isinstance(data, pd.DataFrame):
         if smiles_col is None:
             smiles_col = find_smiles_column(data)
-        if score_cutoff is not None:
-            data = data.query(f"{score_col} > {score_cutoff}")
-            if data.shape[0] == 0:
-                raise ValueError(
-                    f"No compounds with a score above {score_cutoff} were found."
-                )
+        data = _apply_score_cutoff(data, score_col, score_cutoff)
         smiles_list = data[smiles_col].tolist()
         bclusterer = ButinaClustering(smiles_list, njobs=njobs)
         cluster_ids = bclusterer.cluster_molecules(dist_th=dist_th)
         data = data.assign(cluster_id=cluster_ids)
-        if all([pick_best, score_col is not None]):
-            data = data.groupby("cluster_id").apply(
-                lambda x: x.loc[x[score_col].idxmax()]
-            )
+        data = _pick_best_per_cluster(data, score_col, pick_best)
         logger.info(f"Total amount of clusters: {len(data.cluster_id.unique())}")
     else:
         raise ValueError(
@@ -77,7 +116,7 @@ def mcs_based_clustering(
     algorithm="DBSCAN",
     pick_best=False,
     n_jobs=8,
-    timeout=1.5,
+    timeout=15,
     mcs_kwargs=None,
     **kwargs,
 ) -> pd.DataFrame:
@@ -88,11 +127,13 @@ def mcs_based_clustering(
         smiles_col: column name containing the smiles structures of the compounds.
             If is `None`, will try to find the smiles column based on a simple regex search.
         score_col: column name containing the scores. Optional. Defaults to None.
-        score_cutoff: threshold to be used on score_col; keep only above cutoff. Defaults to None.
+        score_cutoff: threshold to be used on score_col; keep only above cutoff. Only
+            applied when score_col is also given. Defaults to None.
         algorithm: algorithm to use for clustering.
         pick_best: whether to pick the best scoring compound from each cluster. Defaults to False.
         n_jobs: number of jobs for parallelization. Defaults to 8.
-        timeout: wall-time in seconds threshold for the algorithm to find the MCS. Defaults to 1.5.
+        timeout: wall-time in seconds threshold for the algorithm to find the MCS. Must be
+            an integer, as required by RDKit's `FindMCS`. Defaults to 15.
         mcs_kwargs: keyword arguments for the MCS algorithm.
         kwargs: keyword arguments for clustering algorithm.
 
@@ -114,12 +155,7 @@ def mcs_based_clustering(
     elif isinstance(data, pd.DataFrame):
         if smiles_col is None:
             smiles_col = find_smiles_column(data)
-        if score_cutoff is not None:
-            data = data.query(f"{score_col} > {score_cutoff}")
-            if data.shape[0] == 0:
-                raise ValueError(
-                    f"No compounds with a score above {score_cutoff} were found."
-                )
+        data = _apply_score_cutoff(data, score_col, score_cutoff)
         smiles_list = data[smiles_col].tolist()
         mcs_cluster = MCSClustering(
             smiles_list, timeout=timeout, njobs=n_jobs, **mcs_kwargs
@@ -127,10 +163,7 @@ def mcs_based_clustering(
         mcs_cluster.compute_similarity_matrix()
         labels = mcs_cluster.cluster_molecules(algorithm=algorithm, **kwargs)
         data = data.assign(cluster_id=labels)
-        if all([pick_best, score_col is not None]):
-            data = data.groupby("cluster_id").apply(
-                lambda x: x.loc[x[score_col].idxmax()]
-            )
+        data = _pick_best_per_cluster(data, score_col, pick_best)
         logger.info(f"Clustering done using {algorithm}.")
         logger.info(f"Total amount of clusters: {len(data.cluster_id.unique())}")
     else:

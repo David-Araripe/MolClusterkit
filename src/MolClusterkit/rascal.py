@@ -250,34 +250,38 @@ class RascalMCES(BaseClusterer):
             # is above the set threshold. Here we only return the second, under tier2Sim
         elif similarity_metric == "smaller/mces":
             simi_metric = results[0].largestFragmentSize / min_atoms
+        else:
+            raise ValueError(
+                f"Unsupported similarity_metric: {similarity_metric!r}. "
+                "Valid options are 'johnson' and 'smaller/mces'."
+            )
         return results[0].smartsString, simi_metric
 
     def compute_similarity_matrix(
         self,
         smiles_list: Optional[list[str]] = None,
         show_progress: bool = True,
-        n_jobs: int = 8,
         **kwargs,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Compute the similarity matrix based on MCES for all molecules.
+        """Compute the similarity matrix based on MCES for all molecules. Parallel
+        processing uses the `njobs` set on the instance.
 
         Args:
             smiles_list: Optional list of SMILES to override instance list
             show_progress: Whether to show progress bar
-            n_jobs: Number of parallel jobs to run
-            kwargs: Additional keyword arguments to be passed to the `_make_opts` method,
-                which will create the configuration object for the MCES algorithm.
+            kwargs: Additional keyword arguments to be passed to `mces_similarity`,
+                such as `similarity_metric`, and to the `_make_opts` method, which
+                will create the configuration object for the MCES algorithm.
 
         Returns:
             Tuple of the SMARTS matrix and the similarity matrix
         """
-        if smiles_list is not None:
-            self.smiles_list = smiles_list
-        if self.smiles_list is None:
-            raise ValueError(
-                "No SMILES list provided. Pass smiles_list to the constructor "
-                "or to compute_similarity_matrix()."
+        if "n_jobs" in kwargs:
+            raise TypeError(
+                "compute_similarity_matrix no longer takes n_jobs. Set njobs on the "
+                "RascalMCES instance instead, e.g. RascalMCES(smiles, njobs=16)."
             )
+        self._resolve_smiles_list(smiles_list)
         n_mols = len(self.smiles_list)
         simi_matrix = np.eye(n_mols, dtype=self.np_dtypes)
 
@@ -287,7 +291,7 @@ class RascalMCES(BaseClusterer):
         applier = ParallelApplier(
             func=self.mces_similarity,
             iterable=pairs,
-            n_jobs=n_jobs,
+            n_jobs=self.njobs,
             show_progress=show_progress,
         )
         results = applier(**kwargs)
