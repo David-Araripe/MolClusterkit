@@ -7,7 +7,7 @@ Three clustering methods are implemented:
 - **MCS-based clustering** — Maximum Common Substructure similarity;
 - **Rascal MCES-based clustering** — Maximum Common Edge Subgraph similarity via the [RASCAL algorithm](https://eprints.whiterose.ac.uk/3568/1/willets3.pdf).
 
-All methods share a common set of clustering algorithms (DBSCAN, hierarchical, spectral, graph-based) that operate on the computed similarity matrix.
+All methods share a common set of clustering algorithms that operate on the computed similarity matrix, selectable through `cluster_molecules(algorithm=...)`: `"DBSCAN"`, `"Hierarchical"`, `"HierarchicalSilhouette"`, `"Spectral"` and `"GraphBased"`. `ButinaClustering` additionally offers `"Butina"` (its default), and `RascalMCES` offers its own fuzzy and non-fuzzy MCES clustering.
 
 ## Installation
 
@@ -18,15 +18,23 @@ All methods share a common set of clustering algorithms (DBSCAN, hierarchical, s
 ### Butina-based clustering
 
 ```python
+import pandas as pd
+
 from MolClusterkit import ButinaClustering
 
 df = pd.read_csv(...)  # Your dataframe
 smiles_list = [...]  # Your list of SMILES
 bclusterer = ButinaClustering(smiles_list)
-clusters = bclusterer.cluster_molecules(cutoff=0.4)
+clusters = bclusterer.cluster_molecules(dist_th=0.4)
 # if you want to assign the clusters your dataframe:
 df = df.assign(cluster_id = clusters)
+
+# the shared algorithms are available on the same object:
+clusters = bclusterer.cluster_molecules(algorithm="Hierarchical", t=5)
 ```
+
+Unparseable SMILES raise a `ValueError` naming the offending indices, so the returned
+cluster labels always line up one-to-one with the input list.
 
 ### MCS-based clustering
 
@@ -51,7 +59,7 @@ Two similarity metrics are available (default is `"johnson"`):
 - **Johnson**: `(atoms_mcs + bonds_mcs)² / ((atoms_mol1 + bonds_mol1) × (atoms_mol2 + bonds_mol2))`
 - **smaller/mces**: `atoms_mcs / min(atoms_mol1, atoms_mol2)`
 
-`hierarchical_silhouette_clustering` automatically selects the best number of clusters by maximizing the silhouette score across a range of 2 to `max_clusters`.
+`hierarchical_silhouette_clustering` automatically selects the best number of clusters by maximizing the silhouette score across a range of 2 to `max_clusters`. The sweep is additionally capped at `n_molecules - 1`, since a silhouette score is undefined once every molecule sits in its own cluster; at least 3 molecules are required.
 
 ### Rascal MCES-based clustering
 
@@ -85,36 +93,30 @@ rascal = RascalMCES(similarityThreshold=0.0)
 smarts, score = rascal.mces_similarity(("CCO", "CCN"))
 ```
 
-## CLI
+### One-call clustering with best-per-cluster selection
 
-MolClusterkit also provides CLIs for Butina and MCS clustering.
+`butina_based_clustering` and `mcs_based_clustering` wrap the classes above in a
+single call that accepts a SMILES list or a `DataFrame`, assigns a `cluster_id`
+column, and — with `pick_best=True` and a `score_col` — returns only the
+highest-scoring compound of each cluster:
 
-### Usage example;
-```bash
-# For mcs-based clustering
-mcscluster -i "path/to/data.csv" \              # --input_path
-    -smic "SMILES" \                            # --smiles_col
-    -scor "pIC50" \  # example..                # --score_col
-    -cut 7.0 \                                  # --score_cutoff
-    -a "DBSCAN" \                               # --algorithm
-    -k '{"eps": 0.3}' \                         # --kwargs
-    -j 12 \                                     # --n_jobs
-    -p \                                        # --pick_best
-    -to 1.5 \                                   # --timeout
-    -mcs '{"AtomCompare": "CompareElements"}' \ # --mcs_kwargs
-    -o "path/to/output.csv"                     # --output_path
+```python
+from MolClusterkit import butina_based_clustering, mcs_based_clustering
 
-# For butina-based clustering
-butinacluster -i "path/to/data.csv" \                # --input_path
-    -smic "SMILES" \                                 # --smiles_col
-    -scor "pIC50" \  # example..                     # --score_col
-    -cut 7.0 \                                       # --score_cutoff
-    -dist 0.35 \                                     # --dist_th
-    -j 12 \                                          # --n_jobs
-    -p \                                             # --pick_best
-    -o "path/to/output.csv"                          # --output_path
+df = pd.read_csv(...)  # columns: e.g. "smiles" and "pIC50"
+
+# keep every compound, just add a cluster_id column
+clustered = butina_based_clustering(df, smiles_col="smiles", dist_th=0.35)
+
+# keep only the best-scoring compound per cluster, above a score cutoff
+best = mcs_based_clustering(
+    df,
+    smiles_col="smiles",
+    score_col="pIC50",
+    score_cutoff=7.0,
+    algorithm="DBSCAN",
+    pick_best=True,
+)
 ```
 
-Both commands support calling on `.smi`, `tsv` and `.csv` files. While working with `.smi` files, options related to scores are not available. The `.smi` option will default as if file contained only a single SMILES per line.
-
-For more information, run `mcscluster -h` or `butinacluster -h`.
+Pass `smiles_col=None` to auto-detect the SMILES column by name.
