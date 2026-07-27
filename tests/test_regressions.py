@@ -8,11 +8,9 @@ returning wrong clusters.
 import unittest
 
 import numpy as np
-import pandas as pd
 
 from MolClusterkit import ButinaClustering, MCSClustering, RascalMCES
 from MolClusterkit.base_clusterer import BaseClusterer
-from MolClusterkit.best_picker import butina_based_clustering, mcs_based_clustering
 from MolClusterkit.parallel import ParallelApplier
 
 
@@ -42,46 +40,6 @@ class TestInvalidSmilesRaise(unittest.TestCase):
             ButinaClustering(["CCO", "not_a_smiles", "CCN"], njobs=1)
         self.assertIn("1", str(ctx.exception))
         self.assertIn("not_a_smiles", str(ctx.exception))
-
-
-class TestBestPickerPickBest(unittest.TestCase):
-    """pick_best=True must return one row per cluster with cluster_id preserved
-    as a column and original dtypes intact."""
-
-    def setUp(self):
-        self.df = pd.DataFrame(
-            {
-                "smiles": ["CCO", "CCN", "CCS", "c1ccccc1", "CC(=O)O"],
-                "score": [1.0, 2.0, 3.0, 4.0, 5.0],
-            }
-        )
-
-    def test_butina_pick_best(self):
-        result = butina_based_clustering(
-            self.df, smiles_col="smiles", score_col="score", pick_best=True, njobs=1
-        )
-        self.assertIn("cluster_id", result.columns)
-        self.assertEqual(result["score"].dtype, np.float64)
-        # one row per cluster
-        self.assertEqual(len(result), result["cluster_id"].nunique())
-
-    def test_default_call_needs_no_score(self):
-        # score_col is optional per the docstring; the default must not build a
-        # 'None > 7.0' query.
-        result = butina_based_clustering(self.df, smiles_col="smiles", njobs=1)
-        self.assertIn("cluster_id", result.columns)
-        self.assertEqual(len(result), len(self.df))
-
-
-class TestMcsDefaults(unittest.TestCase):
-    """mcs_based_clustering with only the required argument must run: a float
-    timeout used to crash RDKit's FindMCS at the default of 1.5s."""
-
-    def test_defaults_run(self):
-        df = pd.DataFrame({"smiles": ["CCO", "CCN", "CCS", "c1ccccc1"]})
-        result = mcs_based_clustering(df, smiles_col="smiles", n_jobs=1)
-        self.assertIn("cluster_id", result.columns)
-        self.assertEqual(len(result), len(df))
 
 
 class TestMcsTimeoutCoercion(unittest.TestCase):

@@ -137,30 +137,15 @@ straight through. Unparseable SMILES raise a `ValueError` naming the offending
 indices. Check `result.canceled` to see whether the search hit the timeout before
 finding the true maximum.
 
-### One-call clustering with best-per-cluster selection
+## Scope
 
-`butina_based_clustering` and `mcs_based_clustering` wrap the classes above in a
-single call that accepts a SMILES list or a `DataFrame`, assigns a `cluster_id`
-column, and — with `pick_best=True` and a `score_col` — returns only the
-highest-scoring compound of each cluster:
+This package clusters molecules and stops there. Since every method returns labels
+in input order, whatever you want to do with the clusters is one step of ordinary
+pandas, kept in your hands rather than behind a flag:
 
 ```python
-from MolClusterkit import butina_based_clustering, mcs_based_clustering
+df = df.assign(cluster_id=bclusterer.cluster_molecules(dist_th=0.35))
 
-df = pd.read_csv(...)  # columns: e.g. "smiles" and "pIC50"
-
-# keep every compound, just add a cluster_id column
-clustered = butina_based_clustering(df, smiles_col="smiles", dist_th=0.35)
-
-# keep only the best-scoring compound per cluster, above a score cutoff
-best = mcs_based_clustering(
-    df,
-    smiles_col="smiles",
-    score_col="pIC50",
-    score_cutoff=7.0,
-    algorithm="DBSCAN",
-    pick_best=True,
-)
+# e.g. the highest-scoring compound of each cluster
+best = df.loc[df.groupby("cluster_id")["pIC50"].idxmax()]
 ```
-
-Pass `smiles_col=None` to auto-detect the SMILES column by name.
