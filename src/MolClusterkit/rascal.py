@@ -42,6 +42,7 @@ class RascalMCES(BaseClusterer):
         similarityThreshold: float = 0.7,
         allBestMCESs: bool = True,
         singleLargestFrag: bool = True,
+        timeout: int = 60,
         njobs: int = 8,
     ):
         """Initialize the Rascal MCES clustering class with a list of SMILES and a defined
@@ -60,13 +61,30 @@ class RascalMCES(BaseClusterer):
             singleLargestFrag: Return the just single largest fragment of the MCES. This
                 is equivalent to running with allBestMCEs=True, finding the result with the
                 largest largestFragmentSize, and calling its largestFragmentOnly method.
+            timeout: Maximum time, in seconds, to spend on an individual MCES
+                determination. -1 means no limit. Defaults to 60.
+
+        Raises:
+            TypeError: if the timeout is not an integer number of seconds.
+            ValueError: if the timeout is 0, or negative other than -1.
         """
         super().__init__(smiles_list=smiles_list, njobs=njobs, np_dtypes=np_dtypes)
+        if isinstance(timeout, bool) or not isinstance(timeout, int):
+            raise TypeError(
+                f"timeout must be an integer number of seconds, got "
+                f"{type(timeout).__name__}."
+            )
+        if timeout == 0 or timeout < -1:
+            raise ValueError(
+                f"timeout must be a positive number of seconds or -1 for no limit, "
+                f"got {timeout}."
+            )
         # Set up Rascal options
         self.opts_dict = {
             "similarityThreshold": similarityThreshold,
             "allBestMCESs": allBestMCESs,
             "singleLargestFrag": singleLargestFrag,
+            "timeout": timeout,
             "returnEmptyMCES": False,
         }
 
@@ -190,6 +208,8 @@ class RascalMCES(BaseClusterer):
 
         if timeout is not None:
             opts.timeout = timeout
+        else:
+            opts.timeout = self.opts_dict["timeout"]
         return opts
 
     def mces_similarity(
@@ -250,34 +270,38 @@ class RascalMCES(BaseClusterer):
             # is above the set threshold. Here we only return the second, under tier2Sim
         elif similarity_metric == "smaller/mces":
             simi_metric = results[0].largestFragmentSize / min_atoms
+        else:
+            raise ValueError(
+                f"Unsupported similarity_metric: {similarity_metric!r}. "
+                "Valid options are 'johnson' and 'smaller/mces'."
+            )
         return results[0].smartsString, simi_metric
 
     def compute_similarity_matrix(
         self,
         smiles_list: Optional[list[str]] = None,
         show_progress: bool = True,
-        n_jobs: int = 8,
         **kwargs,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Compute the similarity matrix based on MCES for all molecules.
+        """Compute the similarity matrix based on MCES for all molecules. Parallel
+        processing uses the `njobs` set on the instance.
 
         Args:
             smiles_list: Optional list of SMILES to override instance list
             show_progress: Whether to show progress bar
-            n_jobs: Number of parallel jobs to run
-            kwargs: Additional keyword arguments to be passed to the `_make_opts` method,
-                which will create the configuration object for the MCES algorithm.
+            kwargs: Additional keyword arguments to be passed to `mces_similarity`,
+                such as `similarity_metric`, and to the `_make_opts` method, which
+                will create the configuration object for the MCES algorithm.
 
         Returns:
             Tuple of the SMARTS matrix and the similarity matrix
         """
-        if smiles_list is not None:
-            self.smiles_list = smiles_list
-        if self.smiles_list is None:
-            raise ValueError(
-                "No SMILES list provided. Pass smiles_list to the constructor "
-                "or to compute_similarity_matrix()."
+        if "n_jobs" in kwargs:
+            raise TypeError(
+                "compute_similarity_matrix no longer takes n_jobs. Set njobs on the "
+                "RascalMCES instance instead, e.g. RascalMCES(smiles, njobs=16)."
             )
+        self._resolve_smiles_list(smiles_list)
         n_mols = len(self.smiles_list)
         simi_matrix = np.eye(n_mols, dtype=self.np_dtypes)
 
@@ -287,7 +311,7 @@ class RascalMCES(BaseClusterer):
         applier = ParallelApplier(
             func=self.mces_similarity,
             iterable=pairs,
-            n_jobs=n_jobs,
+            n_jobs=self.njobs,
             show_progress=show_progress,
         )
         results = applier(**kwargs)
@@ -327,6 +351,11 @@ class RascalMCES(BaseClusterer):
         can belong to multiple clusters. To quickly check for cluster membership, use the
         method `get_cluster_membership` to return a membershipo dictionary.
 
+        RDKit does the MCES comparisons internally here, so `compute_similarity_matrix`
+        is not a prerequisite and `self.similarity_matrix` is left untouched. Since a
+        molecule may land in several clusters, no per-molecule labels can be assigned
+        and `self.mol_clusters` is not set either.
+
         Args:
             cutoff: Similarity cutoff for clustering
             smiles_list: Optional list of SMILES to override instance list
@@ -346,10 +375,6 @@ class RascalMCES(BaseClusterer):
         """
         if smiles_list is not None:
             self.smiles_list = smiles_list
-
-        if self.similarity_matrix is None:
-            logger.warning("Similarity matrix not computed. Computing now...")
-            self.compute_similarity_matrix()
 
         mols = self._mols_from_smiles(self.smiles_list)
         cluster_opts = rdRascalMCES.RascalClusterOptions()
