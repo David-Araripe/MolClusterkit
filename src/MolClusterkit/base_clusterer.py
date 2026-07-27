@@ -28,6 +28,8 @@ class BaseClusterer:
         smiles_list: List of input SMILES strings.
         njobs: Number of jobs for parallel processing.
         np_dtypes: numpy data type for the similarity matrix or arrays.
+        mol_clusters: cluster labels from the last clustering call, as an integer
+            array with one label per molecule.
     """
 
     def __init__(
@@ -92,9 +94,27 @@ class BaseClusterer:
         np.fill_diagonal(distance_matrix, 0.0)
         return distance_matrix
 
+    def _store_labels(self, labels) -> np.ndarray:
+        """Normalise cluster labels and record them on the instance.
+
+        Every clustering method assigns one label per molecule, but the backends
+        behind them (scikit-learn, scipy, networkx) return different containers.
+        Funnelling them through here keeps `mol_clusters` and every return value
+        in a single form.
+
+        Args:
+            labels: per-molecule cluster labels from any clustering backend.
+
+        Returns:
+            labels: 1-D integer array with one cluster label per molecule.
+        """
+        labels = np.asarray(labels, dtype=int)
+        self.mol_clusters = labels
+        return labels
+
     def dbscan_clustering(
         self, eps: float = 0.5, min_samples: int = 5, **kwargs
-    ) -> list:
+    ) -> np.ndarray:
         """DBSCAN clustering based on the similarity matrix.
 
 
@@ -105,13 +125,12 @@ class BaseClusterer:
                 point to be considered as a core point. Defaults to 5.
 
         Returns:
-            labels: list of cluster labels."""
+            labels: array of cluster labels, one per molecule."""
         distance_matrix = self._distance_matrix()
         clustering = DBSCAN(
             eps=eps, min_samples=min_samples, metric="precomputed", **kwargs
         ).fit(distance_matrix)
-        self.mol_clusters = clustering.labels_.tolist()
-        return clustering.labels_.tolist()
+        return self._store_labels(clustering.labels_)
 
     def hierarchical_clustering(self, t, method="ward", criterion="maxclust", **kwargs):
         """Hierarchical clustering based on the similarity matrix.
@@ -124,15 +143,14 @@ class BaseClusterer:
                 and "distance". Defaults to "maxclust".
 
         Returns:
-            labels: list of cluster labels.
+            labels: array of cluster labels, one per molecule.
         """
         distance_matrix = self._distance_matrix()
         # linkage reads a 2-D input as observations-by-features, so the pairwise
         # distances have to be condensed first.
         Z = linkage(squareform(distance_matrix), method=method)
         labels = fcluster(Z, t, criterion=criterion, **kwargs) - 1  # 0-based labels
-        self.mol_clusters = labels
-        return labels
+        return self._store_labels(labels)
 
     def hierarchical_silhouette_clustering(
         self, max_clusters=20, method="ward", criterion="maxclust", **kwargs
@@ -155,7 +173,7 @@ class BaseClusterer:
                 silhouette score can be computed.
 
         Returns:
-            labels: list of cluster labels.
+            labels: array of cluster labels, one per molecule.
         """
         distance_matrix = self._distance_matrix()
         n_samples = distance_matrix.shape[0]
@@ -178,10 +196,9 @@ class BaseClusterer:
         best_labels = all_labels[np.argmax(scores)]
         logger.info(f"Best number of clusters: {len(np.unique(best_labels))}")
         logger.info(f"Silhouette scores: {scores}")
-        self.mol_clusters = best_labels
-        return best_labels
+        return self._store_labels(best_labels)
 
-    def graph_based_clustering(self, threshold: float = 0.7, **kwargs) -> list:
+    def graph_based_clustering(self, threshold: float = 0.7, **kwargs) -> np.ndarray:
         """Graph-based clustering based on the similarity matrix using community detection.
 
         Args:
@@ -189,7 +206,8 @@ class BaseClusterer:
                 added to the graph. Defaults to 0.7.
 
         Returns:
-            labels: list of cluster labels.
+            labels: array of cluster labels, one per molecule. Molecules left out
+                of every detected community are labelled -1.
         """
         self._resolve_smiles_list()
         G = nx.Graph()
@@ -207,17 +225,16 @@ class BaseClusterer:
         for cluster_id, comm in enumerate(detected_communities):
             for node in comm:
                 labels[node] = cluster_id
-        self.mol_clusters = labels
-        return labels
+        return self._store_labels(labels)
 
-    def spectral_clustering(self, n_clusters: int, **kwargs) -> list:
+    def spectral_clustering(self, n_clusters: int, **kwargs) -> np.ndarray:
         """Spectral clustering based on the similarity matrix.
 
         Args:
             n_clusters: number of clusters to form.
 
         Returns:
-            labels: list of cluster labels.
+            labels: array of cluster labels, one per molecule.
         """
         if "random_state" not in kwargs:
             logger.warning(
@@ -227,11 +244,16 @@ class BaseClusterer:
         clustering = SpectralClustering(
             n_clusters=n_clusters, affinity="precomputed", **kwargs
         ).fit(self.similarity_matrix)
-        self.mol_clusters = clustering.labels_
-        return clustering.labels_
+        return self._store_labels(clustering.labels_)
 
-    def cluster_molecules(self, algorithm="DBSCAN", **kwargs):
+    def cluster_molecules(self, algorithm="DBSCAN", **kwargs) -> np.ndarray:
         """Clusters molecules based on the computed similarity matrix.
+
+        The matrix has to exist already: computing it here would mean running a
+        pairwise maximum common substructure search, which is expensive and needs
+        a `similarity_metric` the caller should choose deliberately.
+        `ButinaClustering` overrides this and computes the matrix on demand, as
+        its Tanimoto-on-fingerprints matrix is cheap and takes no such choice.
 
         Args:
             algorithm: algorithm to use for clustering. Options include 'DBSCAN',
@@ -243,11 +265,14 @@ class BaseClusterer:
             ValueError: if the chosen algorithm is not supported.
 
         Returns:
-            labels: list of cluster labels.
+            labels: array of cluster labels, one per molecule.
         """
         if self.similarity_matrix is None:
             raise ValueError(
-                "Similarity matrix has not been computed. Run 'compute_similarity_matrix' first."
+                "Similarity matrix has not been computed. Run "
+                "'compute_similarity_matrix' first. It is not computed "
+                "automatically here because it runs a pairwise maximum common "
+                "substructure search over every pair of molecules."
             )
         clustering_algorithms = {
             "DBSCAN": self.dbscan_clustering,

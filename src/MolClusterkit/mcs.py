@@ -130,28 +130,61 @@ class MCSClustering(BaseClusterer):
             )
 
     def _setup_mcs_configs(self, **mcs_kwargs):
-        """Setup the MCS configurations."""
+        """Setup the MCS configurations.
+
+        Args:
+            mcs_kwargs: keyword arguments for the MCS algorithm. The comparison
+                settings take the name of an RDKit enum member as a string, the
+                rest are passed through to `rdFMCS.FindMCS`.
+
+        Raises:
+            ValueError: if a setting is not one RDKit accepts, or if a comparison
+                setting names an enum member that does not exist.
+        """
         for key, value in mcs_kwargs.items():
-            if key in ["atomCompare", "bondCompare", "ringCompare"]:
-                self.mcs_kwargs[key] = MCS_COMPARE_CONFIGS[key][value]
+            if key in MCS_COMPARE_CONFIGS:
+                options = MCS_COMPARE_CONFIGS[key]
+                if value not in options:
+                    raise ValueError(
+                        f"Unsupported {key} option: {value!r}. "
+                        f"Supported options are: {list(options)}"
+                    )
+                self.mcs_kwargs[key] = options[value]
             elif key in MCS_CONFIGS:
                 self.mcs_kwargs[key] = value
             else:
+                supported = list(MCS_COMPARE_CONFIGS) + list(MCS_CONFIGS)
                 raise ValueError(
                     f"Unsupported MCS configuration: {key}. "
-                    f"Supported configurations are: {list(MCS_COMPARE_CONFIGS.keys())}"
+                    f"Supported configurations are: {supported}"
                 )
 
     def mcs_in_many(self, smiles: list[str]):
         """Find the MCS in two or more molecules, given their SMILES.
 
+        The instance needs no `smiles_list` for this, so the class doubles as a
+        configured front-end to `rdFMCS.FindMCS`: set the comparison options and
+        the timeout once, then query any set of molecules.
+
         Args:
             smiles: list of SMILES strings.
+
+        Raises:
+            ValueError: if any of the SMILES cannot be parsed into molecules.
 
         Returns:
             mcs_result: the MCS result object."""
 
         mols = [Chem.MolFromSmiles(smi) for smi in smiles]
+        invalid = [
+            (idx, smi) for idx, (smi, mol) in enumerate(zip(smiles, mols)) if mol is None
+        ]
+        if invalid:
+            details = ", ".join(f"{idx}: {smi}" for idx, smi in invalid)
+            logger.error(f"Could not parse: {details}!!\nRemove invalid SMILES...")
+            raise ValueError(
+                f"Could not parse SMILES into molecules at index: {details}"
+            )
         return rdFMCS.FindMCS(mols, timeout=self.timeout, **self.mcs_kwargs)
 
     def mcs_similarity(

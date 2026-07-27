@@ -25,7 +25,10 @@ class ButinaClustering(BaseClusterer):
     - smiles_list: List of input SMILES strings.
     - njobs: Number of jobs for parallel processing.
     - fingerprints: Computed fingerprints for the input SMILES.
-    - mol_clusters: A tuple of tuples with indexes within each cluster.
+    - mol_clusters: cluster labels from the last clustering call, as an integer
+        array with one label per molecule.
+    - cluster_members: A tuple of tuples with the indexes within each cluster, set
+        by `butina_clustering`. The first index of each tuple is the cluster centroid.
     - similarity_matrix: A similarity matrix for the input SMILES, computed
         after applying calling the `cluster_molecules` or the `compute_similarity_matrix` methods.
 
@@ -62,6 +65,7 @@ class ButinaClustering(BaseClusterer):
         """
         super().__init__(smiles_list=smiles_list, njobs=njobs, np_dtypes=np_dtypes)
         self.fp_kwargs = {**fp_kwargs}
+        self.cluster_members = None
         self._similarity_matrix_fps = None
         self._set_fp_func(fp_func)
         self.fingerprints = self.calculate_fingerprints()
@@ -121,8 +125,13 @@ class ButinaClustering(BaseClusterer):
         )
         return morgan_gen.GetFingerprint(mol)
 
-    def cluster_molecules(self, algorithm: str = "Butina", **kwargs):
+    def cluster_molecules(self, algorithm: str = "Butina", **kwargs) -> np.ndarray:
         """Cluster the molecules with the chosen algorithm.
+
+        Unlike `MCSClustering` and `RascalMCES`, which raise when the similarity
+        matrix is missing, this computes it on demand: it is Tanimoto over the
+        fingerprints already held by the instance, so it is cheap and involves no
+        choice of similarity metric that the caller should be making.
 
         Args:
             algorithm: algorithm to use for clustering. On top of the algorithms shared
@@ -133,7 +142,7 @@ class ButinaClustering(BaseClusterer):
                 'Butina' or `n_clusters` for 'Spectral'.
 
         Returns:
-            labels: cluster id for each molecule.
+            labels: array of cluster labels, one per molecule.
         """
         if algorithm == "Butina":
             return self.butina_clustering(**kwargs)
@@ -141,9 +150,12 @@ class ButinaClustering(BaseClusterer):
             self.compute_similarity_matrix()
         return super().cluster_molecules(algorithm=algorithm, **kwargs)
 
-    def butina_clustering(self, dist_th: float = 0.35):
-        """cluster the molecules based on the butina algorithm. Returns the clusters
-        as a list of lists of indices.
+    def butina_clustering(self, dist_th: float = 0.35) -> np.ndarray:
+        """cluster the molecules based on the butina algorithm.
+
+        The grouping of indices produced by the algorithm is kept in
+        `self.cluster_members`, where the first index of each tuple is the
+        cluster centroid.
 
         Args:
             dist_th: tanimoto distance threshold. for the butina clustering algorithm.
@@ -151,15 +163,15 @@ class ButinaClustering(BaseClusterer):
                 the more similar the compounds in each cluster). Defaults to 0.35.
 
         Returns:
-            np.ndarray: array of cluster ids for each molecule.
+            labels: array of cluster labels, one per molecule.
         """
-        self.mol_clusters = self._taylor_butina_clustering(
+        self.cluster_members = self._taylor_butina_clustering(
             self.fingerprints, dist_th=dist_th
         )
         cluster_id_list = np.zeros(len(self.fingerprints), dtype=int)
-        for cluster_num, cluster in enumerate(self.mol_clusters):
+        for cluster_num, cluster in enumerate(self.cluster_members):
             cluster_id_list[list(cluster)] = cluster_num
-        return cluster_id_list
+        return self._store_labels(cluster_id_list)
 
     def compute_similarity_matrix(self, fps: Optional[list] = None) -> tuple[tuple]:
         """Applies the butina clustering algorithm to a list of fingerprints.

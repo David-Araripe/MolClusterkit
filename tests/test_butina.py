@@ -37,8 +37,10 @@ class TestButina(unittest.TestCase):
 
         # Test clustering
         cluster_ids = bclusterer.cluster_molecules(dist_th=0.4)
-        self.assertIsNotNone(bclusterer.mol_clusters)
-        self.assertEqual(len(bclusterer.mol_clusters), len(np.unique(cluster_ids)))
+        # mol_clusters holds one label per molecule...
+        self.assertEqual(len(bclusterer.mol_clusters), len(smiles_list))
+        # ...while cluster_members groups the molecule indices by cluster.
+        self.assertEqual(len(bclusterer.cluster_members), len(np.unique(cluster_ids)))
 
     def tearDown(self) -> None:
         return super().tearDown()

@@ -10,7 +10,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from MolClusterkit import ButinaClustering, MCSClustering
+from MolClusterkit import ButinaClustering, MCSClustering, RascalMCES
 from MolClusterkit.base_clusterer import BaseClusterer
 from MolClusterkit.best_picker import butina_based_clustering, mcs_based_clustering
 from MolClusterkit.parallel import ParallelApplier
@@ -196,6 +196,129 @@ class TestHierarchicalDistanceMatrix(unittest.TestCase):
         clusterer.similarity_matrix = sim
         with self.assertRaises(ValueError):
             clusterer.hierarchical_silhouette_clustering()
+
+
+class TestClusterLabelsAreUniform(unittest.TestCase):
+    """Every clustering method returns one integer label per molecule, in an
+    array, and leaves that same array in `mol_clusters`. DBSCAN and GraphBased
+    used to hand back plain lists, and `mol_clusters` used to mean a tuple of
+    per-cluster index tuples after Butina but per-molecule labels otherwise."""
+
+    smiles = ["CCO", "CCN", "CCS", "c1ccccc1", "c1ccccc1O", "CCCCCC"]
+
+    def test_every_algorithm_returns_a_label_array(self):
+        clusterer = ButinaClustering(self.smiles, njobs=1)
+        algorithms = {
+            "Butina": {"dist_th": 0.4},
+            "DBSCAN": {"eps": 0.5, "min_samples": 2},
+            "Hierarchical": {"t": 2},
+            "HierarchicalSilhouette": {"max_clusters": 3},
+            "Spectral": {"n_clusters": 2, "random_state": 0},
+            "GraphBased": {"threshold": 0.3},
+        }
+        for algorithm, kwargs in algorithms.items():
+            with self.subTest(algorithm=algorithm):
+                labels = clusterer.cluster_molecules(algorithm=algorithm, **kwargs)
+                self.assertIsInstance(labels, np.ndarray)
+                self.assertTrue(np.issubdtype(labels.dtype, np.integer))
+                self.assertEqual(len(labels), len(self.smiles))
+                np.testing.assert_array_equal(clusterer.mol_clusters, labels)
+
+    def test_butina_index_groups_live_in_cluster_members(self):
+        clusterer = ButinaClustering(self.smiles, njobs=1)
+        labels = clusterer.cluster_molecules(dist_th=0.4)
+        # every molecule appears exactly once across the member tuples
+        members = [idx for cluster in clusterer.cluster_members for idx in cluster]
+        self.assertCountEqual(members, range(len(self.smiles)))
+        # and the groups agree with the labels they were derived from
+        self.assertEqual(len(clusterer.cluster_members), len(np.unique(labels)))
+        for cluster_num, cluster in enumerate(clusterer.cluster_members):
+            for idx in cluster:
+                self.assertEqual(labels[idx], cluster_num)
+
+
+class TestRascalOptions(unittest.TestCase):
+    """RascalMCES used to swallow unknown constructor kwargs through **kwargs, so
+    `timeout=` was silently ignored. It is now a real, validated parameter."""
+
+    def test_timeout_reaches_the_options_object(self):
+        rascal = RascalMCES(["CCO", "CCN"], timeout=5, njobs=1)
+        self.assertEqual(rascal._make_opts().timeout, 5)
+
+    def test_per_call_timeout_overrides_the_instance(self):
+        rascal = RascalMCES(["CCO", "CCN"], timeout=5, njobs=1)
+        self.assertEqual(rascal._make_opts(timeout=30).timeout, 30)
+
+    def test_unknown_kwargs_are_rejected(self):
+        with self.assertRaises(TypeError):
+            RascalMCES(["CCO", "CCN"], njobs=1, notAnOption=True)
+
+    def test_invalid_timeout_rejected(self):
+        with self.assertRaises(TypeError):
+            RascalMCES(["CCO", "CCN"], timeout=1.5, njobs=1)
+        with self.assertRaises(ValueError):
+            RascalMCES(["CCO", "CCN"], timeout=0, njobs=1)
+
+
+class TestMCSAsStandaloneFrontEnd(unittest.TestCase):
+    """MCSClustering is usable without a smiles_list, as a configured front-end to
+    rdFMCS. Bad input on that path used to surface RDKit's bare "molecule is None"
+    or a raw KeyError, neither of which says what was wrong."""
+
+    series = ["c1ccccc1C(=O)O", "c1ccccc1CC(=O)O", "c1ccccc1CCC(=O)O"]
+
+    def test_mcs_in_many_without_a_smiles_list(self):
+        mcs = MCSClustering(ringMatchesRingOnly=True, completeRingsOnly=True, timeout=5)
+        self.assertIsNone(mcs.smiles_list)
+        result = mcs.mcs_in_many(self.series)
+        self.assertGreater(result.numAtoms, 0)
+        self.assertTrue(result.smartsString)
+
+    def test_comparison_options_reach_rdkit(self):
+        strict = MCSClustering(atomCompare="CompareElements", timeout=5)
+        loose = MCSClustering(atomCompare="CompareAny", timeout=5)
+        pair = ["CCCCO", "CCCCN"]
+        # CompareAny lets the terminal heteroatoms match, CompareElements does not
+        self.assertGreater(
+            loose.mcs_in_many(pair).numAtoms, strict.mcs_in_many(pair).numAtoms
+        )
+
+    def test_invalid_smiles_named_in_mcs_in_many(self):
+        mcs = MCSClustering(timeout=5)
+        with self.assertRaises(ValueError) as ctx:
+            mcs.mcs_in_many(["c1ccccc1", "not_a_smiles"])
+        self.assertIn("1: not_a_smiles", str(ctx.exception))
+
+    def test_unknown_option_name_is_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            MCSClustering(atomCompare="CompareNonsense")
+        self.assertIn("CompareNonsense", str(ctx.exception))
+
+    def test_unknown_setting_lists_every_supported_one(self):
+        with self.assertRaises(ValueError) as ctx:
+            MCSClustering(maximiseBonds=True)  # misspelling of maximizeBonds
+        # the message used to omit the non-comparison settings entirely
+        self.assertIn("maximizeBonds", str(ctx.exception))
+        self.assertIn("atomCompare", str(ctx.exception))
+
+
+class TestFuzzyClusteringSkipsSimilarityMatrix(unittest.TestCase):
+    """fuzzy_mces_clustering used to compute the full pairwise MCES similarity
+    matrix and then never read it, since RascalCluster takes only the molecules.
+    On a real library that is a long computation done for nothing."""
+
+    def test_no_similarity_matrix_is_computed(self):
+        rascal = RascalMCES(["CCO", "CCN", "CCS", "c1ccccc1"], njobs=1)
+
+        def fail(*args, **kwargs):
+            raise AssertionError(
+                "fuzzy_mces_clustering computed the similarity matrix it never uses"
+            )
+
+        rascal.compute_similarity_matrix = fail
+        clusters = rascal.fuzzy_mces_clustering(cutoff=0.5)
+        self.assertIsNone(rascal.similarity_matrix)
+        self.assertGreater(len(clusters), 0)
 
 
 if __name__ == "__main__":

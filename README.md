@@ -9,6 +9,14 @@ Three clustering methods are implemented:
 
 All methods share a common set of clustering algorithms that operate on the computed similarity matrix, selectable through `cluster_molecules(algorithm=...)`: `"DBSCAN"`, `"Hierarchical"`, `"HierarchicalSilhouette"`, `"Spectral"` and `"GraphBased"`. `ButinaClustering` additionally offers `"Butina"` (its default), and `RascalMCES` offers its own fuzzy and non-fuzzy MCES clustering.
 
+Every one of these returns an integer array with one cluster label per molecule, in
+input order, and leaves the same array in `self.mol_clusters` — so the result can be
+assigned straight to a dataframe column regardless of which algorithm produced it.
+The exceptions are Rascal's own `fuzzy_mces_clustering` and `butina_mces_clustering`,
+which return RDKit's groups of molecule indices, as a molecule may belong to more
+than one fuzzy cluster. `ButinaClustering` also exposes its index groups as
+`self.cluster_members`, where the first index of each tuple is the cluster centroid.
+
 ## Installation
 
 `python -m pip install git+https://github.com/David-Araripe/MolClusterkit.git`
@@ -52,6 +60,13 @@ clusters = mcs_cluster.graph_based_clustering(...)
 clusters = mcs_cluster.spectral_clustering(...)
 ```
 
+`compute_similarity_matrix` has to be called first here, and on `RascalMCES`: both run
+a maximum common substructure search over every pair of molecules, which is slow and
+needs a `similarity_metric` you should be choosing yourself, so neither will start one
+behind your back. `ButinaClustering` is the deliberate exception — its matrix is
+Tanimoto over fingerprints it already holds, so `cluster_molecules` just computes it
+on demand.
+
 The `timeout` parameter is the wall-time in seconds per pairwise MCS computation. If the timeout is reached, the algorithm stops and returns the current result. Default is 15 seconds. See RDKit's [MCS docs](https://www.rdkit.org/docs/source/rdkit.Chem.MCS.html) for more details.
 
 Two similarity metrics are available (default is `"johnson"`):
@@ -76,11 +91,18 @@ clusters = rascal.fuzzy_mces_clustering(cutoff=0.7)   # molecules can belong to 
 clusters = rascal.butina_mces_clustering(cutoff=0.7)   # non-fuzzy
 ```
 
+`fuzzy_mces_clustering` and `butina_mces_clustering` let RDKit do the MCES comparisons
+internally, so neither one needs `compute_similarity_matrix` to have been called.
+
 The `similarityThreshold` parameter controls a fast pre-filter: molecule pairs with an estimated similarity below this threshold skip the full MCES computation and get a similarity of 0. This makes Rascal fast but can produce sparse similarity matrices. Lower the threshold if you need more complete coverage.
 
-### Standalone similarity computation
+### Standalone MCS/MCES computation, without clustering
 
-Both `MCSClustering` and `RascalMCES` can be used to compute pairwise similarity without providing a full SMILES list upfront. This is useful when you want to configure the algorithm once and compute similarities for arbitrary pairs:
+Neither `MCSClustering` nor `RascalMCES` needs a SMILES list to be constructed. Left
+empty, they work as configured front-ends to RDKit's `rdFMCS` and `rdRascalMCES`:
+set the comparison options once, then query any molecules you like. This is often the
+quickest way to explore how the MCS options change the substructure you get back,
+since the option objects and enums are wrapped behind plain keyword arguments.
 
 ```python
 from MolClusterkit import MCSClustering, RascalMCES
@@ -92,6 +114,28 @@ smarts, score = mcs.mcs_similarity(("CCO", "CCN"))
 rascal = RascalMCES(similarityThreshold=0.0)
 smarts, score = rascal.mces_similarity(("CCO", "CCN"))
 ```
+
+`mcs_in_many` takes any number of molecules at once, which makes comparing settings
+a matter of changing one keyword:
+
+```python
+series = ["c1ccccc1C(=O)O", "c1ccccc1CC(=O)O", "c1ccccc1CCC(=O)O"]
+
+strict = MCSClustering(ringMatchesRingOnly=True, completeRingsOnly=True, timeout=5)
+loose = MCSClustering(atomCompare="CompareAny", bondCompare="CompareAny", timeout=5)
+
+print(strict.mcs_in_many(series).smartsString)
+print(loose.mcs_in_many(series).smartsString)
+```
+
+The keyword arguments are validated against the options RDKit accepts, so a
+misspelled setting raises instead of being silently ignored. `atomCompare`,
+`bondCompare` and `ringCompare` take the enum member *name* as a string (e.g.
+`"CompareAny"`); the rest — `maximizeBonds`, `threshold`, `matchValences`,
+`ringMatchesRingOnly`, `completeRingsOnly`, `matchChiralTag`, `verbose` — are passed
+straight through. Unparseable SMILES raise a `ValueError` naming the offending
+indices. Check `result.canceled` to see whether the search hit the timeout before
+finding the true maximum.
 
 ### One-call clustering with best-per-cluster selection
 
