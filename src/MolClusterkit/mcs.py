@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """Module containing the MCS clustering class."""
 from itertools import combinations
-from typing import List, Tuple
+from math import ceil
+from typing import Literal, Optional, Tuple
 
-import networkx as nx
 import numpy as np
-from joblib import Parallel, delayed
-from networkx.algorithms import community
+from numpy.typing import DTypeLike
 from rdkit import Chem
 from rdkit.Chem import rdFMCS
-from scipy.cluster.hierarchy import fcluster, linkage
-from sklearn.cluster import DBSCAN, SpectralClustering
-from tqdm import tqdm
 
+from .base_clusterer import BaseClusterer
 from .logger import logger
+from .parallel import ParallelApplier
 
 MCS_COMPARE_CONFIGS = {
     "atomCompare": {
@@ -45,12 +43,15 @@ MCS_CONFIGS = {  # all args in https://rdkit.org/docs/source/rdkit.Chem.rdFMCS.h
 }
 
 
-class MCSClustering:
+class MCSClustering(BaseClusterer):
     """A class for clustering molecules based on Maximum Common Substructure (MCS) similarity.
 
     Attributes:
-    - smiles_list (List[str]): List of input SMILES strings.
-    - similarity_matrix (Optional[np.ndarray]): Computed similarity matrix for the input SMILES.
+        smiles_list: list of input SMILES strings representing the molecules to cluster.
+        similarity_matrix: computed similarity matrix for the input SMILES.
+        smarts_matrix: matrix containing SMARTS patterns of the MCS.
+        timeout: a timeout for the MCS computation in seconds.
+        mcs_kwargs: keyword arguments for the MCS algorithm.
 
     Usage:
     >>> smiles_list = [...]  # Your list of SMILES
@@ -59,13 +60,24 @@ class MCSClustering:
     >>> labels = mcs_cluster.cluster_molecules(algorithm='DBSCAN')
     """
 
-    def __init__(self, smiles_list, timeout=15, **mcs_kwargs):
+    def __init__(
+        self,
+        smiles_list=None,
+        timeout=15,
+        njobs: int = 8,
+        np_dtypes: DTypeLike = np.float32,
+        **mcs_kwargs,
+    ):
         """Initialize the Maximum Common Substructure (MCS) clustering class with a
         list of SMILES.
 
         Args:
             smiles_list: a list of smiles.
-            timeout: a timeout for the MCS computation in seconds. Defaults to 1.5.
+            timeout: a timeout for the MCS computation in seconds. Must be positive;
+                fractional values are rounded up to whole seconds, since RDKit only
+                accepts an integer timeout. Defaults to 15.
+            np_dtypes: numpy data type for the similarity matrix or arrays.
+                Defaults to np.float32.
             mcs_kwargs: keyword arguments for the MCS algorithm. Will be parsed based
                 on the values from MCS_CONFIGS.
 
@@ -75,37 +87,145 @@ class MCSClustering:
             >>> mcs_cluster.compute_similarity_matrix()
             >>> labels = mcs_cluster.cluster_molecules(algorithm='DBSCAN')
         """
-        self.smiles_list = smiles_list
-        self.timeout = timeout
-        self.similarity_matrix = None
+        super().__init__(smiles_list=smiles_list, njobs=njobs, np_dtypes=np_dtypes)
+        self.timeout = self._set_timeout(timeout)
         self.mcs_kwargs = {}
         self._setup_mcs_configs(**mcs_kwargs)
         self._check_low_timeout()
+
+    def _set_timeout(self, timeout) -> int:
+        """Coerce the timeout to the whole number of seconds that RDKit expects.
+
+        `rdFMCS.FindMCS` only accepts an unsigned int, so floats are rounded up.
+        Rounding up (rather than to nearest) keeps a sub-second timeout from
+        becoming 0, which RDKit interprets as "no timeout at all".
+
+        Args:
+            timeout: requested timeout in seconds.
+
+        Raises:
+            TypeError: if the timeout is not a number.
+            ValueError: if the timeout is not strictly positive.
+
+        Returns:
+            int: the timeout in whole seconds.
+        """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError(
+                f"timeout must be a number of seconds, got {type(timeout).__name__}."
+            )
+        if timeout <= 0:
+            raise ValueError(
+                f"timeout must be a positive number of seconds, got {timeout}."
+            )
+        return ceil(timeout)
 
     def _check_low_timeout(self):
         """Check if the timeout is too low."""
         if self.timeout < 2:
             logger.warning(
-                "Timeout is too low. The MCS algorithm might not find the MCS for some pairs, "
-                "raising a not-so-clear error message. Consider increasing the timeout."
+                f"A timeout of {self.timeout}s is very low. The MCS search may be "
+                "cancelled before it reaches the true maximum common substructure, "
+                "which underestimates the similarity. Consider increasing the timeout."
             )
 
     def _setup_mcs_configs(self, **mcs_kwargs):
-        """Setup the MCS configurations."""
+        """Setup the MCS configurations.
+
+        Args:
+            mcs_kwargs: keyword arguments for the MCS algorithm. The comparison
+                settings take the name of an RDKit enum member as a string, the
+                rest are passed through to `rdFMCS.FindMCS`.
+
+        Raises:
+            ValueError: if a setting is not one RDKit accepts, or if a comparison
+                setting names an enum member that does not exist.
+        """
         for key, value in mcs_kwargs.items():
-            if key in ["atomCompare", "bondCompare", "ringCompare"]:
-                self.mcs_kwargs[key] = MCS_COMPARE_CONFIGS[key][value]
+            if key in MCS_COMPARE_CONFIGS:
+                options = MCS_COMPARE_CONFIGS[key]
+                if value not in options:
+                    raise ValueError(
+                        f"Unsupported {key} option: {value!r}. "
+                        f"Supported options are: {list(options)}"
+                    )
+                self.mcs_kwargs[key] = options[value]
             elif key in MCS_CONFIGS:
                 self.mcs_kwargs[key] = value
             else:
+                supported = list(MCS_COMPARE_CONFIGS) + list(MCS_CONFIGS)
                 raise ValueError(
                     f"Unsupported MCS configuration: {key}. "
-                    f"Supported configurations are: {list(MCS_COMPARE_CONFIGS.keys())}"
+                    f"Supported configurations are: {supported}"
                 )
 
-    def _mcs_similarity(self, smipair: Tuple[str, str]):
-        """Compute the MCS similarity between two molecules given their SMILES and
-        return the fraction of matched atoms to the smaller molecule."""
+    def mcs_in_many(self, smiles: list[str]):
+        """Find the MCS in two or more molecules, given their SMILES.
+
+        The instance needs no `smiles_list` for this, so the class doubles as a
+        configured front-end to `rdFMCS.FindMCS`: set the comparison options and
+        the timeout once, then query any set of molecules.
+
+        Args:
+            smiles: list of SMILES strings.
+
+        Raises:
+            ValueError: if any of the SMILES cannot be parsed into molecules.
+
+        Returns:
+            mcs_result: the MCS result object."""
+
+        mols = [Chem.MolFromSmiles(smi) for smi in smiles]
+        invalid = [
+            (idx, smi) for idx, (smi, mol) in enumerate(zip(smiles, mols)) if mol is None
+        ]
+        if invalid:
+            details = ", ".join(f"{idx}: {smi}" for idx, smi in invalid)
+            logger.error(f"Could not parse: {details}!!\nRemove invalid SMILES...")
+            raise ValueError(
+                f"Could not parse SMILES into molecules at index: {details}"
+            )
+        return rdFMCS.FindMCS(mols, timeout=self.timeout, **self.mcs_kwargs)
+
+    def mcs_similarity(
+        self,
+        smipair: Tuple[str, str],
+        similarity_metric: Literal["johnson", "smaller/mces"] = "johnson",
+    ):
+        """Compute MCES between two molecules given their SMILES, returning the SMARTS
+        pattern and a score. Two metrics are available to calculate the similarity between
+        the two molecules, with values ranging from 0 to 1:
+
+        1. Johnson metric (default):
+        The similarity is calculated as the sum of the number of atoms
+        and bonds in the MCES divided by the sum of the number of atoms and bonds in
+        the two molecules.
+
+        .. math::
+        sim = \\frac{(E(MCES) + V(MCES))^2}{(E(Mol1) + V(Mol1)) * (E(Mol2) + V(Mol2))}
+
+        2. Smaller/MCES metric:
+        The similarity is calculated as number of atoms in the
+        largest fragment of the MCES divided by the number of atoms in the smaller
+        molecule.
+
+        .. math::
+        sim = \\frac{E(LargestFragment(MCES))}{min(E(Mol1), E(Mol2))}
+
+        Args:
+            smipair: tuple of two SMILES strings.
+            similarity_metric: the similarity metric to use. Options are 'johnson' or
+                'smaller/mces'. Defaults to 'johnson'.
+
+        Raises:
+            ValueError: if the SMILES cannot be parsed into molecules, or if an
+                unsupported similarity_metric is given.
+
+        Returns:
+            smarts_string: the SMARTS pattern of the MCS.
+            similarity: the fraction of matched atoms to the smaller molecule.
+        """
+
         mols = [Chem.MolFromSmiles(smi) for smi in smipair]
         if any([mols[0] is None, mols[1] is None]):
             logger.error(
@@ -113,44 +233,63 @@ class MCSClustering:
             )
             raise ValueError("Could not parse SMILES into molecules.")
         mcs_result = rdFMCS.FindMCS(list(mols), timeout=self.timeout, **self.mcs_kwargs)
-        min_atoms = min(mols[0].GetNumAtoms(), mols[1].GetNumAtoms())
-        return mcs_result.smartsString, mcs_result.numAtoms / min_atoms
-
-    def pairwise_mcs_similarity(self, smipair) -> Tuple[List[str], List[float]]:
-        """Helper function to compute similarity of molecule pair i and j."""
-        smarts_string, similarity = self._mcs_similarity(smipair=smipair)
-        return smarts_string, similarity
+        if similarity_metric == "johnson":
+            mcs_atoms, mcs_bonds = mcs_result.numAtoms, mcs_result.numBonds
+            mol1_atoms, mol1_bonds = mols[0].GetNumAtoms(), mols[0].GetNumBonds()
+            mol2_atoms, mol2_bonds = mols[1].GetNumAtoms(), mols[1].GetNumBonds()
+            simi_metric = (mcs_atoms + mcs_bonds) ** 2 / (
+                (mol1_atoms + mol1_bonds) * (mol2_atoms + mol2_bonds)
+            )
+        elif similarity_metric == "smaller/mces":
+            simi_metric = mcs_result.numAtoms / min(
+                mols[0].GetNumAtoms(), mols[1].GetNumAtoms()
+            )
+        else:
+            raise ValueError(
+                f"Unsupported similarity_metric: {similarity_metric!r}. "
+                "Valid options are 'johnson' and 'smaller/mces'."
+            )
+        return mcs_result.smartsString, simi_metric
 
     def compute_similarity_matrix(
-        self, show_progress=True, n_jobs=8
+        self,
+        smiles_list: Optional[list[str]] = None,
+        show_progress=True,
+        similarity_metric: Literal["johnson", "smaller/mces"] = "johnson",
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Compute the similarity matrix based on MCS for all molecules.
+        """Compute the similarity matrix based on MCS for all molecules. Parallel
+        processing uses the `njobs` set on the instance.
 
         Args:
-            n_jobs: number of jobs for parallel processing. Defaults to 8.
+            smiles_list: optional list of SMILES overriding the one held by the
+                instance. Defaults to None.
             show_progress: whether to show the progress bar. Defaults to True.
+            similarity_metric: the similarity metric to use for every pair. Options are
+                'johnson' or 'smaller/mces'. Defaults to 'johnson'.
 
         Returns:
             smarts_matrix: np.ndarray with the smarts patterns of the MCS's.
             simi_matrix: np.ndarray with the similarity matrix.
         """
-        # ---- First we compute the similarity matrix ----
         # create the similarity matrix with 1s in the diagonal
+        self._resolve_smiles_list(smiles_list)
         n_mols = len(self.smiles_list)
-        simi_matrix = np.eye(n_mols)
+        simi_matrix = np.eye(n_mols, dtype=self.np_dtypes)
         # compute the similarity for all pairs of molecules and unpack results
         pairs = list(combinations(self.smiles_list, 2))
-        if show_progress:
-            pairs = tqdm(pairs, total=len(pairs))
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(self.pairwise_mcs_similarity)(p) for p in pairs
+        applier = ParallelApplier(
+            func=self.mcs_similarity,
+            iterable=pairs,
+            n_jobs=self.njobs,
+            show_progress=show_progress,
         )
+        results = applier(similarity_metric=similarity_metric)
         smarts_strings, similarities = zip(*results)
         # take the indices of the upper triangle and populate the matrix
         r, c = np.triu_indices(n_mols, 1)  # row, column indices, respectively
         simi_matrix[r, c] = similarities
         # add values for the lower triangle
-        simi_matrix += simi_matrix.T - np.eye(n_mols)
+        simi_matrix += simi_matrix.T - np.eye(n_mols, dtype=self.np_dtypes)
         # ---- Now we also create the matrix with the SMARTS ----
         smarts_matrix = np.full((n_mols, n_mols), "", dtype=object)
         smarts_matrix[r, c] = smarts_strings
@@ -162,120 +301,3 @@ class MCSClustering:
         self.similarity_matrix = simi_matrix
         self.smarts_matrix = smarts_matrix
         return smarts_matrix, simi_matrix
-
-    def dbscan_clustering(
-        self, eps: float = 0.5, min_samples: int = 5, **kwargs
-    ) -> list:
-        """DBSCAN clustering based on the similarity matrix.
-
-
-        Args:
-            eps: The maximum distance between two samples for one to be considered as in
-                the neighborhood of the other. Defaults to 0.5.
-            min_samples: The number of samples (or total weight) in a neighborhood for a
-                point to be considered as a core point. Defaults to 5.
-
-        Returns:
-            labels: list of cluster labels."""
-        distance_matrix = 1 - self.similarity_matrix
-        clustering = DBSCAN(
-            eps=eps, min_samples=min_samples, metric="precomputed", **kwargs
-        ).fit(distance_matrix)
-        return clustering.labels_.tolist()
-
-    def hierarchical_clustering(self, t, method="ward", criterion="maxclust", **kwargs):
-        """Hierarchical clustering based on the similarity matrix.
-
-        Args:
-            t: number of clusters or the threshold to cut the hierarchy.
-            method: linkage algorithm to use. Options include 'single', 'complete',
-                'average', 'ward'. Defaults to "ward".
-            criterion: criterion to form flat clusters. Common choices are 'maxclust'
-                and 'distance'. Defaults to "maxclust".
-
-        Returns:
-            labels: list of cluster labels.
-        """
-        distance_matrix = 1 - self.similarity_matrix
-        Z = linkage(distance_matrix, method=method)
-        labels = fcluster(Z, t, criterion=criterion, **kwargs)
-        return labels - 1  # Adjusting the labels to be 0-based
-
-    def graph_based_clustering(self, threshold: float = 0.7, **kwargs) -> list:
-        """Graph-based clustering based on the similarity matrix using community detection.
-
-        Args:
-            threshold: similarity threshold. Edges with similarity below this are not
-                added to the graph. Defaults to 0.7.
-
-        Returns:
-            labels: list of cluster labels.
-        """
-        G = nx.Graph()
-        iter_arr = list(combinations(range(len(self.smiles_list)), 2))
-
-        for i, j in iter_arr:
-            # Adding an edge if similarity is above the threshold
-            if self.similarity_matrix[i, j] > threshold:
-                G.add_edge(i, j, weight=self.similarity_matrix[i, j])
-
-        # Using community detection to cluster
-        detected_communities = community.greedy_modularity_communities(G, **kwargs)
-        # Converting communities to labels
-        labels = [-1] * len(self.smiles_list)
-        for cluster_id, comm in enumerate(detected_communities):
-            for node in comm:
-                labels[node] = cluster_id
-        return labels
-
-    def spectral_clustering(self, n_clusters: int, **kwargs) -> list:
-        """Spectral clustering based on the similarity matrix.
-
-        Args:
-            n_clusters: number of clusters to form.
-
-        Returns:
-            labels: list of cluster labels.
-        """
-        if "random_state" not in kwargs:
-            logger.warning(
-                "No random_state provided for SpectralClustering! "
-                "Should be passed in kwargs."
-            )
-        clustering = SpectralClustering(
-            n_clusters=n_clusters, affinity="precomputed", **kwargs
-        ).fit(self.similarity_matrix)
-        return clustering.labels_
-
-    def cluster_molecules(self, algorithm="DBSCAN", **kwargs):
-        """Clusters molecules based on the computed similarity matrix.
-
-        Args:
-            algorithm: algorithm to use for clustering. Options include 'DBSCAN',
-                'Hierarchical', 'Spectral', 'GraphBased'. Defaults to "DBSCAN".
-
-        Raises:
-            ValueError: if the similarity matrix has not been computed.
-            ValueError: if the chosen algorithm is not supported.
-
-        Returns:
-            labels: list of cluster labels.
-        """
-        if self.similarity_matrix is None:
-            raise ValueError(
-                "Similarity matrix has not been computed. Run 'compute_similarity_matrix' first."
-            )
-        clustering_algorithms = {
-            "DBSCAN": self.dbscan_clustering,
-            "Hierarchical": self.hierarchical_clustering,
-            "Spectral": self.spectral_clustering,
-            "GraphBased": self.graph_based_clustering,
-        }
-        if algorithm not in clustering_algorithms:
-            raise ValueError(f"Unsupported algorithm: {algorithm}")
-        return clustering_algorithms[algorithm](**kwargs)
-
-    def __call__(self, algorithm="DBSCAN", n_jobs=8, **kwargs):
-        """Convenience function to compute similarity matrix and perform clustering."""
-        self.compute_similarity_matrix(n_jobs=n_jobs)
-        return self.cluster_molecules(algorithm=algorithm, **kwargs)

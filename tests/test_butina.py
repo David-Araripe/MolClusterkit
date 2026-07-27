@@ -4,10 +4,8 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 from MolClusterkit.butina import ButinaClustering
-from MolClusterkit.misc import reset_index_if_needed
 
 
 class TestButina(unittest.TestCase):
@@ -17,14 +15,6 @@ class TestButina(unittest.TestCase):
             self.smiles = f.read().splitlines()
         np.random.seed(42)
         self.scores = np.random.randint(0, 10, size=len(self.smiles))
-
-    def test_reset_index_if_needed(self):
-        # Create a test dataframe
-        df = pd.DataFrame({"col1": [1, 2, 3, 4, 5]})
-        df.drop(2, inplace=True)
-        # Check if index is reset
-        new_df = reset_index_if_needed(df)
-        self.assertTrue(all(new_df.index == [0, 1, 2, 3]))
 
     def test_ButinaClustering(self):
         smiles_list = ["CCO", "CCN", "CCS"]  # Some test SMILES strings
@@ -37,8 +27,10 @@ class TestButina(unittest.TestCase):
 
         # Test clustering
         cluster_ids = bclusterer.cluster_molecules(dist_th=0.4)
-        self.assertIsNotNone(bclusterer.mol_clusters)
-        self.assertEqual(len(bclusterer.mol_clusters), len(np.unique(cluster_ids)))
+        # mol_clusters holds one label per molecule...
+        self.assertEqual(len(bclusterer.mol_clusters), len(smiles_list))
+        # ...while cluster_members groups the molecule indices by cluster.
+        self.assertEqual(len(bclusterer.cluster_members), len(np.unique(cluster_ids)))
 
     def tearDown(self) -> None:
         return super().tearDown()

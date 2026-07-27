@@ -1,11 +1,21 @@
 # MolClusterkit
 Toolkit containing different molecule clustering techniques and algorithms.
 
-For now, two clustering methods are implemented:
+Three clustering methods are implemented:
 
-- Butina-based clustering;
+- **Butina-based clustering** — fingerprint similarity with the Butina algorithm;
+- **MCS-based clustering** — Maximum Common Substructure similarity;
+- **Rascal MCES-based clustering** — Maximum Common Edge Subgraph similarity via the [RASCAL algorithm](https://eprints.whiterose.ac.uk/3568/1/willets3.pdf).
 
-- Maximum common substructure (MCS)-based clustering.
+All methods share a common set of clustering algorithms that operate on the computed similarity matrix, selectable through `cluster_molecules(algorithm=...)`: `"DBSCAN"`, `"Hierarchical"`, `"HierarchicalSilhouette"`, `"Spectral"` and `"GraphBased"`. `ButinaClustering` additionally offers `"Butina"` (its default), and `RascalMCES` offers its own fuzzy and non-fuzzy MCES clustering.
+
+Every one of these returns an integer array with one cluster label per molecule, in
+input order, and leaves the same array in `self.mol_clusters` — so the result can be
+assigned straight to a dataframe column regardless of which algorithm produced it.
+The exceptions are Rascal's own `fuzzy_mces_clustering` and `butina_mces_clustering`,
+which return RDKit's groups of molecule indices, as a molecule may belong to more
+than one fuzzy cluster. `ButinaClustering` also exposes its index groups as
+`self.cluster_members`, where the first index of each tuple is the cluster centroid.
 
 ## Installation
 
@@ -16,67 +26,126 @@ For now, two clustering methods are implemented:
 ### Butina-based clustering
 
 ```python
+import pandas as pd
+
 from MolClusterkit import ButinaClustering
 
 df = pd.read_csv(...)  # Your dataframe
 smiles_list = [...]  # Your list of SMILES
 bclusterer = ButinaClustering(smiles_list)
-clusters = bclusterer.cluster_molecules(cutoff=0.4)
+clusters = bclusterer.cluster_molecules(dist_th=0.4)
 # if you want to assign the clusters your dataframe:
 df = df.assign(cluster_id = clusters)
+
+# the shared algorithms are available on the same object:
+clusters = bclusterer.cluster_molecules(algorithm="Hierarchical", t=5)
 ```
 
-### MCS
-Example: 
-``` python
+Unparseable SMILES raise a `ValueError` naming the offending indices, so the returned
+cluster labels always line up one-to-one with the input list.
+
+### MCS-based clustering
+
+```python
 from MolClusterkit import MCSClustering
 
 smiles_list = [...]  # Your list of SMILES
 mcs_cluster = MCSClustering(smiles_list, timeout=15)
 smarts_arr, similarity_matrix = mcs_cluster.compute_similarity_matrix()
-# Now you can cluster the molecules using any of the methods (see docs for more details):
+# Now you can cluster the molecules using any of the methods:
 clusters = mcs_cluster.dbscan_clustering(...)
 clusters = mcs_cluster.hierarchical_clustering(...)
+clusters = mcs_cluster.hierarchical_silhouette_clustering(max_clusters=20)
 clusters = mcs_cluster.graph_based_clustering(...)
 clusters = mcs_cluster.spectral_clustering(...)
 ```
 
-Here, the timeout represents the wall-time in seconds that the algorithm will run for. If the timeout is reached, the algorithm will stop and return the current results. Default value is 15 seconds.
+`compute_similarity_matrix` has to be called first here, and on `RascalMCES`: both run
+a maximum common substructure search over every pair of molecules, which is slow and
+needs a `similarity_metric` you should be choosing yourself, so neither will start one
+behind your back. `ButinaClustering` is the deliberate exception — its matrix is
+Tanimoto over fingerprints it already holds, so `cluster_molecules` just computes it
+on demand.
 
-Note, this implementation just wraps RDKit's maximum common substructure algorithm. Check [here](https://www.rdkit.org/docs/source/rdkit.Chem.MCS.html#:~:text=The%20MCS%20algorithm,%3E%3E%3E) for more details on the timeout parameter.
+The `timeout` parameter is the wall-time in seconds per pairwise MCS computation. If the timeout is reached, the algorithm stops and returns the current result. Default is 15 seconds. See RDKit's [MCS docs](https://www.rdkit.org/docs/source/rdkit.Chem.MCS.html) for more details.
 
-The similarity scores obtained from `compute_similarity_matrix` is the fraction of atoms in the MCS over the total number of atoms in the smaller molecule. The obtained matrix is a square matrix with the similarity scores between all molecules in the dataset.
+Two similarity metrics are available (default is `"johnson"`):
 
-## CLI
+- **Johnson**: `(atoms_mcs + bonds_mcs)² / ((atoms_mol1 + bonds_mol1) × (atoms_mol2 + bonds_mol2))`
+- **smaller/mces**: `atoms_mcs / min(atoms_mol1, atoms_mol2)`
 
-MolClusterkit also provides a CLI for clustering molecules using the Butina algorithm. Small examples are in the modules docstrings.
+`hierarchical_silhouette_clustering` automatically selects the best number of clusters by maximizing the silhouette score across a range of 2 to `max_clusters`. The sweep is additionally capped at `n_molecules - 1`, since a silhouette score is undefined once every molecule sits in its own cluster; at least 3 molecules are required.
 
-### Usage example;
-```bash
-# For mcs-based clustering
-mcscluster -i "path/to/data.csv" \              # --input_path
-    -smic "SMILES" \                            # --smiles_col
-    -scor "pIC50" \  # example..                # --score_col
-    -cut 7.0 \                                  # --score_cutoff
-    -a "DBSCAN" \                               # --algorithm
-    -k '{"eps": 0.3}' \                         # --kwargs
-    -j 12 \                                     # --n_jobs
-    -p \                                        # --pick_best
-    -to 1.5 \                                   # --timeout
-    -mcs '{"AtomCompare": "CompareElements"}' \ # --mcs_kwargs
-    -o "path/to/output.csv"                     # --output_path
+### Rascal MCES-based clustering
 
-# For butina-based clustering
-butinacluster -i "path/to/data.csv" \                # --input_path
-    -smic "SMILES" \                                 # --smiles_col
-    -scor "pIC50" \  # example..                     # --score_col
-    -cut 7.0 \                                       # --score_cutoff
-    -dist 0.35 \                                     # --dist_th
-    -j 12 \                                          # --n_jobs
-    -p \                                             # --pick_best
-    -o "path/to/output.csv"                          # --output_path
+```python
+from MolClusterkit import RascalMCES
+
+smiles_list = [...]  # Your list of SMILES
+rascal = RascalMCES(smiles_list, similarityThreshold=0.7)
+smarts_arr, similarity_matrix = rascal.compute_similarity_matrix()
+# Use any of the shared clustering algorithms:
+clusters = rascal.hierarchical_silhouette_clustering(max_clusters=20)
+# Or use Rascal's own clustering methods:
+clusters = rascal.fuzzy_mces_clustering(cutoff=0.7)   # molecules can belong to multiple clusters
+clusters = rascal.butina_mces_clustering(cutoff=0.7)   # non-fuzzy
 ```
 
-Both commands support calling on `.smi`, `tsv` and `.csv` files. While working with `.smi` files, options related to scores are not available. The `.smi` option will default as if file contained only a single SMILES per line.
+`fuzzy_mces_clustering` and `butina_mces_clustering` let RDKit do the MCES comparisons
+internally, so neither one needs `compute_similarity_matrix` to have been called.
 
-For more information, run `mcscluster -h` or `butinacluster -h`.
+The `similarityThreshold` parameter controls a fast pre-filter: molecule pairs with an estimated similarity below this threshold skip the full MCES computation and get a similarity of 0. This makes Rascal fast but can produce sparse similarity matrices. Lower the threshold if you need more complete coverage.
+
+### Standalone MCS/MCES computation, without clustering
+
+Neither `MCSClustering` nor `RascalMCES` needs a SMILES list to be constructed. Left
+empty, they work as configured front-ends to RDKit's `rdFMCS` and `rdRascalMCES`:
+set the comparison options once, then query any molecules you like. This is often the
+quickest way to explore how the MCS options change the substructure you get back,
+since the option objects and enums are wrapped behind plain keyword arguments.
+
+```python
+from MolClusterkit import MCSClustering, RascalMCES
+
+# Configure once, use for any pair
+mcs = MCSClustering(timeout=15)
+smarts, score = mcs.mcs_similarity(("CCO", "CCN"))
+
+rascal = RascalMCES(similarityThreshold=0.0)
+smarts, score = rascal.mces_similarity(("CCO", "CCN"))
+```
+
+`mcs_in_many` takes any number of molecules at once, which makes comparing settings
+a matter of changing one keyword:
+
+```python
+series = ["c1ccccc1C(=O)O", "c1ccccc1CC(=O)O", "c1ccccc1CCC(=O)O"]
+
+strict = MCSClustering(ringMatchesRingOnly=True, completeRingsOnly=True, timeout=5)
+loose = MCSClustering(atomCompare="CompareAny", bondCompare="CompareAny", timeout=5)
+
+print(strict.mcs_in_many(series).smartsString)
+print(loose.mcs_in_many(series).smartsString)
+```
+
+The keyword arguments are validated against the options RDKit accepts, so a
+misspelled setting raises instead of being silently ignored. `atomCompare`,
+`bondCompare` and `ringCompare` take the enum member *name* as a string (e.g.
+`"CompareAny"`); the rest — `maximizeBonds`, `threshold`, `matchValences`,
+`ringMatchesRingOnly`, `completeRingsOnly`, `matchChiralTag`, `verbose` — are passed
+straight through. Unparseable SMILES raise a `ValueError` naming the offending
+indices. Check `result.canceled` to see whether the search hit the timeout before
+finding the true maximum.
+
+## Scope
+
+This package clusters molecules and stops there. Since every method returns labels
+in input order, whatever you want to do with the clusters is one step of ordinary
+pandas, kept in your hands rather than behind a flag:
+
+```python
+df = df.assign(cluster_id=bclusterer.cluster_molecules(dist_th=0.35))
+
+# e.g. the highest-scoring compound of each cluster
+best = df.loc[df.groupby("cluster_id")["pIC50"].idxmax()]
+```

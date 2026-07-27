@@ -7,7 +7,7 @@ name = "MolClusterkit"
 dynamic = ["version"]
 description = "Toolkit containing different molecule clustering methods and algorithms."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { file = "LICENSE" }
 keywords = ["clustering", "cheminformatics"]
 authors = [{ name = "David Araripe", email = "david.araripe17@gmail.com" }]
@@ -36,17 +36,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "pytest",
   "ruff",
   "isort",
   "black",
 ]
-
-[project.scripts]
-butinacluster = "MolClusterkit.cli.butina_cluster:main"
-mcscluster = "MolClusterkit.cli.mcs_cluster:main"
-
-[tool.setuptools.dynamic]
-version = { attr = "MolClusterkit.__version__" }
 
 [tool.setuptools_scm]
 write_to = "src/MolClusterkit/_version.py"
